@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: 22void-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-void}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-void_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-22void}
+    ports:
+      - "5432:5432"
+    volumes:
+      - 22void_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-void} -d ${POSTGRES_DB:-22void}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  22void_pgdata:
