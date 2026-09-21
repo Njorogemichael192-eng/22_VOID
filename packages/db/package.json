@@ -16,6 +16,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@prisma/client": "^7.10.0"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"

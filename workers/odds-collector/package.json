@@ -17,6 +17,9 @@
     "test": "vitest run",
     "start": "tsx src/index.ts"
   },
+  "dependencies": {
+    "@22void/provider-contracts": "0.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "tsx": "^4.23.13",

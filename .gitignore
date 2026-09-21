@@ -25,6 +25,8 @@ test-results/
 # Database
 prisma/*.db
 prisma/*.db-journal
+# Generated Prisma client (@22void/db)
+packages/db/src/generated/
 
 # Logs
 *.log

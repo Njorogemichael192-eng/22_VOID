@@ -22,18 +22,32 @@
     "format:check": "prettier --check .",
     "state:check": "tsx scripts/project-state-check.ts",
     "test:fixtures": "echo \"Phase 17 scope: regression fixtures under tests/fixtures\"",
+    "postinstall": "prisma generate",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev"
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:test": "npm test -w @22void/db"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@types/pg": "^8.23.1",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
+    "dotenv": "^17.4.2",
     "eslint": "^10.10.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.7",
+    "prisma": "^7.10.0",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0"
+  },
+  "allowScripts": {
+    "prisma@7.10.0": true,
+    "@prisma/engines@7.10.0": true
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "pg": "^8.23.0"
   }
 }

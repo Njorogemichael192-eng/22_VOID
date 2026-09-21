@@ -1,0 +1,438 @@
+// 22_VOID — Prisma schema (Phase 1 — Database)
+//
+// Conventions:
+// - Models are PascalCase; tables are snake_case via @@map.
+// - Every table: cuid string id + createdAt (+ updatedAt where mutable).
+// - Odds, stakes and returns are Decimal(@db.Decimal) so the optimizer never
+//   suffers float drift (see ARBITRAGE_ENGINE_SPEC §9, §70).
+// - Canonical value sets come from the @22void/domain package; these enums
+//   mirror those values for DB-level integrity.
+// - Markets are normalized per source: a Market row is one source's canonical
+//   market identity (the spec's Market.sourceMarketId); equivalent markets from
+//   different sources are grouped at query time by (eventId, period, family,
+//   marketType, participant, line) for cross-source candidate generation.
+// - Settlement rules are versioned and belong to a source (spec §53); a Market
+//   cannot be persisted without a settlement rule (Rule 3 — unknown settlement
+//   means no arb).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../packages/db/src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum EventStatus {
+  SCHEDULED
+  LIVE
+  FINISHED
+  POSTPONED
+  CANCELLED
+  ABANDONED
+  UNKNOWN
+}
+
+enum MarketStatus {
+  OPEN
+  SUSPENDED
+  CLOSED
+  VOID
+  UNKNOWN
+}
+
+enum SourceStatus {
+  UNKNOWN
+  HEALTHY
+  DEGRADED
+  DOWN
+}
+
+enum MarketFamily {
+  MATCH_RESULT
+  DOUBLE_CHANCE
+  MATCH_TOTAL
+  ASIAN_TOTAL
+  ASIAN_HANDICAP
+  TEAM_TOTAL
+  TEAM_ASIAN_TOTAL
+  CORNERS
+  CARDS
+  BTTS
+  EXACT_SCORE
+}
+
+enum Period {
+  FULL_MATCH
+  FIRST_HALF
+  SECOND_HALF
+  EXTRA_TIME
+  PENALTIES
+}
+
+enum SelectionOutcomeType {
+  HOME
+  DRAW
+  AWAY
+  OVER
+  UNDER
+  BTTS_YES
+  BTTS_NO
+  HOME_OR_DRAW
+  AWAY_OR_DRAW
+  HOME_OR_AWAY
+}
+
+enum SettlementResultType {
+  FULL_WIN
+  FULL_LOSS
+  PUSH
+  HALF_WIN
+  HALF_LOSS
+  VOID
+}
+
+enum OpportunityStatus {
+  DETECTED
+  VALIDATING
+  THEORETICAL_ARB
+  FRESH_ARB
+  VERIFIED_ARB
+  STALE
+  INVALIDATED
+  REJECTED
+}
+
+enum RejectionReasonType {
+  UNKNOWN_SETTLEMENT
+  EVENT_MISMATCH
+  EVENT_MATCH_FAILED
+  EVENT_MATCH_UNCERTAIN
+  PERIOD_MISMATCH
+  NON_EXHAUSTIVE
+  NON_EXCLUSIVE
+  BOTH_LOSS_STATE
+  NEGATIVE_GUARANTEED_PROFIT
+  STALE_ODDS
+  INVALID_ODDS
+  INVALID_ODDS_PAYLOAD
+  INVALID_MARKET
+  UNSUPPORTED_MARKET
+  NO_STATE_MODEL
+  INCOMPLETE_COVERAGE
+  STAKE_LIMIT
+  ROUNDING_DESTROYS_PROFIT
+  OPTIMIZATION_FAILED
+  PROVIDER_ERROR
+  PROVIDER_UNAVAILABLE
+}
+
+// ---------------------------------------------------------------------------
+// Events (spec §4.1)
+// ---------------------------------------------------------------------------
+
+model Event {
+  id               String          @id @default(cuid())
+  canonicalEventId String          @unique
+  sport            String          @default("football")
+  competition      String
+  homeTeam         String
+  awayTeam         String
+  startTime        DateTime
+  status           EventStatus     @default(SCHEDULED)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  sourceEventIds SourceEventId[]
+  markets        Market[]
+  opportunities  Opportunity[]
+
+  @@index([startTime])
+  @@map("events")
+}
+
+model SourceEventId {
+  id            String     @id @default(cuid())
+  eventId       String
+  event         Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  oddsSourceId  String
+  oddsSource    OddsSource @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  sourceEventId String
+  startTime     DateTime?
+  homeTeam      String?
+  awayTeam      String?
+  competition   String?
+  rawJson       Json?
+  createdAt     DateTime   @default(now())
+
+  @@unique([oddsSourceId, sourceEventId])
+  @@index([eventId])
+  @@map("source_event_ids")
+}
+
+// ---------------------------------------------------------------------------
+// Teams / aliases (normalization dictionary, spec §6)
+// ---------------------------------------------------------------------------
+
+model Team {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  country   String?
+  sport     String      @default("football")
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  aliases TeamAlias[]
+
+  @@map("teams")
+}
+
+model TeamAlias {
+  id           String      @id @default(cuid())
+  teamId       String
+  team         Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  alias        String
+  oddsSourceId String?
+  oddsSource   OddsSource? @relation(fields: [oddsSourceId], references: [id], onDelete: SetNull)
+  createdAt    DateTime    @default(now())
+
+  @@unique([alias, oddsSourceId])
+  @@index([teamId])
+  @@map("team_aliases")
+}
+
+// ---------------------------------------------------------------------------
+// Bookmakers and odds sources (providers of prices)
+// ---------------------------------------------------------------------------
+
+model Bookmaker {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  country   String?
+  isActive  Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  selections Selection[]
+
+  @@map("bookmakers")
+}
+
+model OddsSource {
+  id              String      @id @default(cuid())
+  key             String      @unique
+  displayName     String
+  baseUrl         String?
+  status          SourceStatus @default(UNKNOWN)
+  lastSeenAt      DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  sourceEventIds SourceEventId[]
+  teamAliases    TeamAlias[]
+  settlementRules SettlementRule[]
+  markets        Market[]
+  rawPayloads    RawPayload[]
+  scannerChecks  ScannerHealth[]
+
+  @@map("odds_sources")
+}
+
+// ---------------------------------------------------------------------------
+// Settlement rules (versioned per source, spec §53)
+// ---------------------------------------------------------------------------
+
+model SettlementRule {
+  id            String       @id @default(cuid())
+  oddsSourceId  String
+  oddsSource    OddsSource   @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  family        MarketFamily
+  marketType    String
+  version       Int
+  description   String?
+  ruleJson      Json?
+  effectiveFrom DateTime     @default(now())
+  effectiveTo   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  markets Market[]
+
+  @@unique([oddsSourceId, family, marketType, version])
+  @@map("settlement_rules")
+}
+
+// ---------------------------------------------------------------------------
+// Markets and selections (spec §4.2, §4.3)
+// ---------------------------------------------------------------------------
+
+model Market {
+  id               String         @id @default(cuid())
+  eventId          String
+  event            Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  oddsSourceId     String
+  oddsSource       OddsSource     @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  sourceMarketId   String
+  settlementRuleId String
+  settlementRule   SettlementRule @relation(fields: [settlementRuleId], references: [id], onDelete: Restrict)
+  period           Period
+  family           MarketFamily
+  marketType       String
+  participant      String?
+  line             String?
+  status           MarketStatus   @default(OPEN)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  selections Selection[]
+
+  @@unique([oddsSourceId, sourceMarketId])
+  @@index([eventId, family, period, line])
+  @@map("markets")
+}
+
+model Selection {
+  id              String              @id @default(cuid())
+  marketId        String
+  market          Market              @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  bookmakerId     String
+  bookmaker       Bookmaker           @relation(fields: [bookmakerId], references: [id], onDelete: Restrict)
+  outcome         SelectionOutcomeType
+  odds            Decimal             @db.Decimal(12, 6)
+  sourceUpdatedAt DateTime?
+  observedAt      DateTime            @default(now())
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  observations OddsObservation[]
+  legs         OpportunityLeg[]
+
+  @@unique([marketId, bookmakerId, outcome])
+  @@index([outcome])
+  @@map("selections")
+}
+
+// ---------------------------------------------------------------------------
+// Odds observations — price history per selection
+// ---------------------------------------------------------------------------
+
+model OddsObservation {
+  id              String    @id @default(cuid())
+  selectionId     String
+  selection       Selection @relation(fields: [selectionId], references: [id], onDelete: Cascade)
+  odds            Decimal   @db.Decimal(12, 6)
+  sourceUpdatedAt DateTime?
+  observedAt      DateTime  @default(now())
+  rawJson         Json?
+
+  @@index([selectionId, observedAt])
+  @@map("odds_observations")
+}
+
+// ---------------------------------------------------------------------------
+// Raw payload retention (spec §65)
+// ---------------------------------------------------------------------------
+
+model RawPayload {
+  id           String      @id @default(cuid())
+  oddsSourceId String
+  oddsSource   OddsSource  @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  requestId    String?
+  endpoint     String?
+  payload      Json
+  receivedAt   DateTime    @default(now())
+  createdAt    DateTime    @default(now())
+
+  @@index([oddsSourceId, receivedAt])
+  @@map("raw_payloads")
+}
+
+// ---------------------------------------------------------------------------
+// Opportunities and legs (spec §4.5, §56, §57, §67)
+// ---------------------------------------------------------------------------
+
+model Opportunity {
+  id                String                @id @default(cuid())
+  eventId           String
+  event             Event                 @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  status            OpportunityStatus     @default(DETECTED)
+  rejectionReason   RejectionReasonType?
+  marketStructure   String?
+  totalStake        Decimal?              @db.Decimal(14, 6)
+  minReturn         Decimal?              @db.Decimal(14, 6)
+  guaranteedProfit  Decimal?              @db.Decimal(14, 6)
+  roi               Decimal?              @db.Decimal(14, 6)
+  worstState        String?
+  engineVersion     String
+  normalizerVersion String?
+  settlementVersion String?
+  optimizerVersion  String?
+  detectedAt        DateTime              @default(now())
+  validatedAt       DateTime?
+  expiresAt         DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  legs      OpportunityLeg[]
+  auditLogs AuditLog[]
+
+  @@index([status, detectedAt])
+  @@map("opportunities")
+}
+
+model OpportunityLeg {
+  id               String                @id @default(cuid())
+  opportunityId    String
+  opportunity      Opportunity           @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  selectionId      String
+  selection        Selection             @relation(fields: [selectionId], references: [id], onDelete: Restrict)
+  oddsSnapshot     Decimal               @db.Decimal(12, 6)
+  stake            Decimal?              @db.Decimal(14, 6)
+  guaranteedReturn Decimal?              @db.Decimal(14, 6)
+  settlementResult SettlementResultType?
+  createdAt        DateTime              @default(now())
+
+  @@unique([opportunityId, selectionId])
+  @@index([selectionId])
+  @@map("opportunity_legs")
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail (spec §66) — every opportunity must be reconstructable
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id            String        @id @default(cuid())
+  opportunityId String?
+  opportunity   Opportunity?  @relation(fields: [opportunityId], references: [id], onDelete: SetNull)
+  entityType    String?
+  entityId      String?
+  action        String
+  actor         String?
+  detail        Json?
+  createdAt     DateTime      @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Scanner health (worker heartbeats)
+// ---------------------------------------------------------------------------
+
+model ScannerHealth {
+  id           String       @id @default(cuid())
+  runId        String       @unique
+  oddsSourceId String?
+  oddsSource   OddsSource?  @relation(fields: [oddsSourceId], references: [id], onDelete: SetNull)
+  status       SourceStatus @default(UNKNOWN)
+  message      String?
+  startedAt    DateTime     @default(now())
+  finishedAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  @@index([oddsSourceId, startedAt])
+  @@map("scanner_health")
+}

@@ -1,0 +1,130 @@
+import type { WireEvent } from "@22void/provider-contracts";
+
+/**
+ * Raw Odds-API.io v4 GET /v4/sports/{sport}/odds response body (fixture).
+ *
+ * Mirrors tests/fixtures/providers/raw/odds-api.soccer.json — the file kept as
+ * the verbatim "raw payload" record. Timestamps are fixed (past) so tests are
+ * deterministic; the OddsApiProvider adapter parses this exact shape.
+ */
+export const ODDS_API_SOCCER_RAW: WireEvent[] = [
+  {
+    id: "oddsepl001",
+    sport_key: "soccer_epl",
+    sport_title: "England - Premier League",
+    commence_time: "2026-11-21T19:00:00.000Z",
+    home_team: "Manchester City",
+    away_team: "Arsenal",
+    status: "scheduled",
+    bookmakers: [
+      {
+        key: "williamhill",
+        title: "William Hill",
+        last_update: "2026-11-20T18:02:00.000Z",
+        markets: [
+          {
+            key: "h2h",
+            last_update: "2026-11-20T18:01:00.000Z",
+            outcomes: [
+              { name: "Manchester City", price: 1.85 },
+              { name: "Arsenal", price: 4.2 },
+              { name: "Draw", price: 3.7 },
+            ],
+          },
+          {
+            key: "totals",
+            last_update: "2026-11-20T18:00:00.000Z",
+            outcomes: [
+              { name: "Over 2.5", price: 1.72 },
+              { name: "Under 2.5", price: 2.12 },
+            ],
+          },
+          {
+            key: "team_totals_away",
+            last_update: "2026-11-20T17:59:00.000Z",
+            outcomes: [
+              { name: "Over 1.5", price: 2.2 },
+              { name: "Under 1.5", price: 1.62 },
+            ],
+          },
+          {
+            key: "btts",
+            last_update: "2026-11-20T17:58:00.000Z",
+            outcomes: [
+              { name: "Yes", price: 1.55 },
+              { name: "No", price: 2.35 },
+            ],
+          },
+          {
+            key: "double_chance",
+            last_update: "2026-11-20T17:57:00.000Z",
+            outcomes: [
+              { name: "1X", price: 1.23 },
+              { name: "X2", price: 1.98 },
+              { name: "12", price: 1.29 },
+            ],
+          },
+          {
+            key: "player_goals_anytime",
+            last_update: "2026-11-20T17:57:00.000Z",
+            outcomes: [
+              { name: "Haaland", price: 1.35 },
+              { name: "Saka", price: 1.6 },
+            ],
+          },
+        ],
+      },
+      {
+        key: "pinnacle",
+        title: "Pinnacle",
+        last_update: "2026-11-20T18:03:00.000Z",
+        markets: [
+          {
+            key: "h2h",
+            last_update: "2026-11-20T18:02:00.000Z",
+            outcomes: [
+              { name: "Manchester City", price: 1.88 },
+              { name: "Arsenal", price: 4.1 },
+              { name: "Draw", price: 3.65 },
+            ],
+          },
+          {
+            key: "totals",
+            last_update: "2026-11-20T18:02:00.000Z",
+            outcomes: [
+              { name: "Over 2.5", price: 1.74 },
+              { name: "Under 2.5", price: 2.08 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "oddsepl002",
+    sport_key: "soccer_epl",
+    sport_title: "England - Premier League",
+    commence_time: "2026-11-21T19:30:00.000Z",
+    home_team: "Chelsea",
+    away_team: "Liverpool",
+    status: "live",
+    bookmakers: [
+      {
+        key: "williamhill",
+        title: "William Hill",
+        last_update: "2026-11-20T18:05:00.000Z",
+        markets: [
+          {
+            key: "h2h",
+            last_update: "2026-11-20T18:04:00.000Z",
+            outcomes: [
+              { name: "Chelsea", price: 2.6 },
+              { name: "Liverpool", price: 2.75 },
+              { name: "Draw", price: 3.6 },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+];

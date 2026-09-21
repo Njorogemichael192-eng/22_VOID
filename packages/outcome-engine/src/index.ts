@@ -2,25 +2,29 @@
  * @22void/outcome-engine
  *
  * Football outcome/state engine (BUILD_AGENT_PROMPT Phase 7).
- * Represents score as (H,A) with T=H+A and generates relevant state classes
- * by partitioning the infinite score space at settlement boundaries
- * (ARBITRAGE_ENGINE_SPEC §16–20).
+ * Represents score as (H,A) with T=H+A and reduces the infinite score space to
+ * representative state classes at settlement boundaries (spec §16–§20), so
+ * downstream coverage/optimization work is `selections × classes`, not
+ * `selections × thousands of scores`.
  *
- * Status: Phase 0 skeleton. Implemented in Phase 7.
+ * Classification is delegated to `@22void/settlement`: a selection that cannot
+ * settle is reported, never guessed (Rule 3).
  */
 
-/** Football full-match score state: (homeGoals, awayGoals). */
-export interface FootballScore {
-  homeGoals: number;
-  awayGoals: number;
-}
+export { goalMargin, matchTotal, metricTotal } from "./score";
+export type { FootballScore, MetricCounts } from "./score";
 
-/** Returns the match total for a football score. */
-export function matchTotal(score: FootballScore): number {
-  return score.homeGoals + score.awayGoals;
-}
-
-/** Returns the goal margin (home minus away) used by handicaps. */
-export function goalMargin(score: FootballScore): number {
-  return score.homeGoals - score.awayGoals;
-}
+export {
+  boundaryMax,
+  buildStateModel,
+  payoffMatrix,
+  settleVector,
+  settlementMatrix,
+} from "./state-model";
+export type {
+  OutcomeState,
+  StateModelOptions,
+  StateModelResult,
+  StateModelUnknown,
+  VectorResult,
+} from "./state-model";

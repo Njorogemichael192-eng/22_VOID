@@ -28,6 +28,9 @@ jobs:
       - name: Project state check
         run: npm run state:check
 
+      - name: Generate Prisma client
+        run: npm run db:generate
+
       - name: Lint
         run: npm run lint
 
@@ -45,3 +48,38 @@ jobs:
 
       - name: E2E smoke
         run: npm run test:e2e --workspace @22void/web
+
+  db-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: void
+          POSTGRES_PASSWORD: void_dev_password
+          POSTGRES_DB: 22void
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U void -d 22void"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://void:void_dev_password@localhost:5432/22void
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Apply migrations
+        run: npm run db:deploy
+
+      - name: CRUD integration tests
+        run: npm run db:test

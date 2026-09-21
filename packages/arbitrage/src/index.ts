@@ -2,25 +2,56 @@
  * @22void/arbitrage
  *
  * False-arb detector + stake optimizer (BUILD_AGENT_PROMPT Phases 8–9).
- * Builds the payoff/settlement matrix for every relevant state class, verifies
- * full coverage (no both-loss or uncovered states), then solves:
- *   maximize z s.t. sum(Si)=T, return(state_j) >= z, Si >= 0.
- * An arb exists only when minimum return > T (ARBITRAGE_ENGINE_SPEC §23–25).
+ * Phase 8 builds the payoff/settlement matrix for every relevant state class,
+ * verifies full coverage (no both-loss, overlap or push/gap states) and emits
+ * structured, human-readable rejection reasons. Phase 9 (stake optimizer) then
+ * decides whether the covered structure actually guarantees `min return > T`.
  *
- * Status: Phase 0 skeleton. Implemented in Phases 8–9.
+ * But the authoritative arb test is always the state model — never
+ * `sum(1/odds) < 1` alone (spec §23–§27, §41).
  */
 
-import type { RejectionReason } from "@22void/domain";
+export { detectFalseArb, formatCoverageReport, formatRejection } from "./coverage";
+export type {
+  ArbitrageLeg,
+  CoverageReport,
+  FalseArbVerdict,
+  OverlapKind,
+  RejectionEvidence,
+  StateGap,
+  StateOverlap,
+} from "./coverage";
 
-/** Placeholder for a candidate under evaluation (Phase 8). */
-export interface ArbitrageCandidate {
-  eventId: string;
-  legIds: string[];
-  status?: "VALIDATING" | "REJECTED";
-}
+export {
+  bestPricePerSelection,
+  classifyStructure,
+  familiesCompatible,
+  formatPruneVerdict,
+  generateCandidates,
+  isStandardComplement,
+  pruneCandidate,
+  pruneCandidates,
+  scanCandidates,
+} from "./candidates";
+export type {
+  Candidate,
+  CandidateGeneratorOptions,
+  CandidatePruneOptions,
+  CandidateScan,
+  PricedSelection,
+  PruneReason,
+  PruneResult,
+  PruneVerdict,
+  ScanOptions,
+  StructureType,
+} from "./candidates";
 
-/** Placeholder for a structured rejection verdict (Phase 8). */
-export interface RejectionVerdict {
-  reason: RejectionReason;
-  evidence: Record<string, unknown>;
-}
+export {
+  buildMultiplierMatrix,
+  classicThreeWayStakes,
+  classicTwoWayStakes,
+  optimizeCandidate,
+  optimizeStakes,
+  reciprocalSum,
+} from "./optimizer";
+export type { StakePlan } from "./optimizer";

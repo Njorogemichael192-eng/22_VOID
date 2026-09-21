@@ -2,26 +2,30 @@
  * @22void/provider-contracts
  *
  * Provider abstraction layer (BUILD_AGENT_PROMPT Phase 3).
- * Defines the `OddsProvider` interface that adapter implementations (MockProvider,
- * ParlayAPI adapter, Odds-API.io adapter) must satisfy. Provider-specific code
- * must stay inside adapters; the core engine must not know provider details.
  *
- * Status: Phase 0 skeleton. Interface is defined in Phase 3.
+ * - `OddsProvider` interface: the only surface the scanner/engine touches. Live
+ *   adapter concerns (wire shapes, auth, endpoints, market-key dialects) stay
+ *   inside `adapters/` and `providers/`; the engine must not know them.
+ * - Provider envelope: a provider-normalized transfer structure carrying
+ *   canonical families plus provider-canonical market/outcome/price notes and
+ *   two clock values — `receivedAt` (ingest time) and per-price
+ *   `sourceUpdatedAt` (provider's update time).
+ * - Canonical records: conversion of an envelope into Phase-4
+ *   canonicalEvent/canonicalSelection records. Records that do not satisfy the
+ *   domain schema are collected as `rejected`, never guessed.
+ *
+ * Providers: MockProvider (deterministic fixture harness), OddsApiProvider
+ * (initial), ParlayApiProvider (adapter skeleton for the multi-provider phase).
  */
 
-import type { RejectionReason } from "@22void/domain";
-
-/** Placeholder for the canonical provider-adjusted event record defined in Phase 3. */
-export interface ProviderEvent {
-  provider: string;
-  id: string;
-}
-
-/** Placeholder for a provider health record (Phase 12/14). */
-export interface ProviderHealth {
-  provider: string;
-  reachable: boolean;
-  error?: RejectionReason;
-}
-
-/** Marker so the package ships a typed public API until Phase 3 fills it in. */
+export * from "./provider-id.js";
+export * from "./envelope.js";
+export * from "./odds-provider.js";
+export * from "./canonical.js";
+export * from "./providers/keys.js";
+export * from "./providers/outcomes.js";
+export * from "./providers/translate.js";
+export * from "./mock-provider.js";
+export * from "./adapters/odds-api.js";
+export * from "./adapters/parlay-api.js";
+export * from "./providers/http.js";

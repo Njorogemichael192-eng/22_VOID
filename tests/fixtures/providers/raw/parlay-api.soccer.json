@@ -1,0 +1,67 @@
+[
+  {
+    "id": "parlayepl001",
+    "sport_key": "soccer_epl",
+    "sport_title": "England - Premier League",
+    "commence_time": "2026-11-21T19:00:00.000Z",
+    "home_team": "Manchester City",
+    "away_team": "Arsenal",
+    "status": "scheduled",
+    "bookmakers": [
+      {
+        "key": "book-c",
+        "title": "BookC",
+        "last_update": "2026-11-20T18:06:00.000Z",
+        "markets": [
+          {
+            "key": "h2h_3_way",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [
+              { "name": "Manchester City", "price": 1.9 },
+              { "name": "Arsenal", "price": 4.25 },
+              { "name": "Draw", "price": 3.6 }
+            ]
+          },
+          {
+            "key": "totals",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [
+              { "name": "Over 2.5", "price": 1.8 },
+              { "name": "Under 2.5", "price": 2 }
+            ]
+          },
+          {
+            "key": "team_totals_home",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [
+              { "name": "Over 1.5", "price": 1.95 },
+              { "name": "Under 1.5", "price": 1.85 }
+            ]
+          },
+          {
+            "key": "double_chance",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [
+              { "name": "1X", "price": 1.25 },
+              { "name": "X2", "price": 1.95 },
+              { "name": "12", "price": 1.31 }
+            ]
+          },
+          {
+            "key": "btts",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [
+              { "name": "Yes", "price": 1.58 },
+              { "name": "No", "price": 2.3 }
+            ]
+          },
+          {
+            "key": "correct_score",
+            "last_update": "2026-11-20T18:05:00.000Z",
+            "outcomes": [{ "name": "2-1", "price": 9 }]
+          }
+        ]
+      }
+    ]
+  }
+]

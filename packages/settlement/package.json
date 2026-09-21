@@ -11,10 +11,13 @@
       "default": "./src/index.ts"
     }
   },
-  "scripts": {
+"scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
+  },
+  "dependencies": {
+    "@22void/domain": "0.0.0"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

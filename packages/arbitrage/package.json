@@ -16,6 +16,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@22void/domain": "0.0.0",
+    "@22void/outcome-engine": "0.0.0",
+    "@22void/settlement": "0.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"

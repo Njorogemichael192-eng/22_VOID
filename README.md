@@ -10,7 +10,7 @@ No opportunity is ever classified as an arbitrage from `sum(1/odds) < 1` alone. 
 apps/web                 Next.js 16 dashboard (Tailwind v4 + shadcn/ui)
 packages/
   shared                 shared helpers (zod schemas, math, time)
-  domain                 canonical enums & value sets
+  domain                 canonical domain model: events, markets, selections, odds, freshness, settlement (Phase 2)
   provider-contracts     OddsProvider interface + adapters (Phase 3)
   normalization          event + market normalization (Phases 4–5)
   settlement             settlement engine (Phase 6)
@@ -34,6 +34,10 @@ scripts/                 project-state automation
 ```bash
 npm ci
 cp .env.example .env       # fill secrets server-side only
+
+docker compose up -d       # local PostgreSQL 16
+npm run db:migrate         # first time: creates + applies prisma/migrations
+
 npm run typecheck
 npm test
 npm run build
@@ -58,7 +62,10 @@ npm run test:e2e --workspace @22void/web
 | `npm run typecheck` | `tsc --noEmit` across workspaces |
 | `npm run format` | Prettier write |
 | `npm run state:check` | Validate PROJECT_STATE.md structure |
-| `npm run db:migrate` | Prisma migrate (Phase 1+) |
+| `npm run db:generate` | Generate the Prisma client |
+| `npm run db:migrate` | `prisma migrate dev` (create/apply dev migrations) |
+| `npm run db:deploy` | `prisma migrate deploy` (apply committed migrations, CI-safe) |
+| `npm run db:test` | CRUD integration tests for the `@22void/db` package |
 
 ## Design documents
 
@@ -70,4 +77,4 @@ npm run test:e2e --workspace @22void/web
 
 ## Status
 
-Phase 0 (Foundation) in progress — see `PROJECT_STATE.md` for evidence and the next action.
+Phase 2 (Domain model) complete — see `PROJECT_STATE.md` for evidence and the next action (Phase 3 — Provider).

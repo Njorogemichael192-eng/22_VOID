@@ -1,20 +1,31 @@
 /**
  * @22void/settlement
  *
- * Settlement engine (BUILD_AGENT_PROMPT Phase 6).
- * Maps states to SettlementResult and computes payout multipliers:
- *   FULL_WIN -> odds, PUSH -> 1, HALF_WIN -> (odds+1)/2,
- *   HALF_LOSS -> 0.5, FULL_LOSS -> 0, VOID -> 1.
- * Asian quarter lines are split into two component lines per ARBITRAGE_ENGINE_SPEC §13–15.
+ * Settlement engine (BUILD_AGENT_PROMPT Phase 6, spec §9–§16, §53).
  *
- * Status: Phase 0 skeleton. Implemented in Phase 6.
+ * Evaluates a canonical selection against a final match state into a
+ * SettlementResult with component-level detail: standard and Asian totals
+ * (whole/half/quarter lines), Asian handicaps, 1X2, double chance, BTTS and
+ * exact score, across periods (full / first half / second half / extra time /
+ * penalties). Quarter lines decompose into two 50/50 component lines and the
+ * result is always derived from component settlements — never special-cased.
+ * Rules are versioned per provider with effective windows; unknown settlement
+ * always surfaces as a reason, never a guess (Rule 3, UNKNOWN_SETTLEMENT).
  */
 
-import type { SettlementResult } from "@22void/domain";
+export { formatLine, lineKind, parseCanonicalLine, splitAsianLine } from "./line";
+export type { LineKind } from "./line";
 
-/** Placeholder for the actionable settlement rule (Phase 6). */
-export interface SettlementRule {
-  ruleVersion: string;
-  /** Minimum leg multiplier accounting for half-win/push semantics. */
-  evaluate(stake: number, odds: number, result: SettlementResult): number;
-}
+export { periodScore, settleSelection } from "./settle";
+export type {
+  LineScore,
+  MatchState,
+  SettleableSelection,
+  SettleAssessment,
+  SettleCoreResult,
+} from "./settle";
+
+export { SettlementEngine, SettlementRuleStore, standardSettlementRule } from "./engine";
+export type { SettlementRule, SettleVerdict, SettlementEngineOptions } from "./engine";
+
+export { componentPayouts, payout } from "./payout";

@@ -13,6 +13,7 @@ export default tseslint.config(
       "**/test-results/**",
       "**/.turbo/**",
       "prisma/**",
+      "packages/db/src/generated/**",
     ],
   },
   eslint.configs.recommended,
@@ -20,10 +21,7 @@ export default tseslint.config(
   prettier,
   {
     rules: {
-      "@typescript-eslint/consistent-type-imports": [
-        "error",
-        { prefer: "type-imports" },
-      ],
+      "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
     },
   }
 );

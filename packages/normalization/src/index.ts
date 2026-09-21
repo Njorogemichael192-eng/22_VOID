@@ -1,25 +1,52 @@
 /**
  * @22void/normalization
  *
- * Event + market normalization (BUILD_AGENT_PROMPT Phases 4–5).
- * Converts provider-specific labels into canonical events (team names, home/away,
- * competition, start time, source IDs) and canonical markets (market family,
- * period, participant, line). Never merges uncertain events; never treats
- * different market families as interchangeable.
- *
- * Status: Phase 0 skeleton. Implemented in Phases 4–5.
+ * Event + market normalization (BUILD_AGENT_PROMPT Phases 4–5). Event scope:
+ * team names, home/away, competition, start time, source IDs — different
+ * provider views of the same match merge into one canonical event; uncertain
+ * matches are never silently merged. Market scope: provider keys/labels become
+ * canonical family / period / marketType / participant / line; equivalent
+ * labels normalize identically and different families never interchange.
  */
 
-/** Placeholder for a normalized source-ID mapping record (Phase 4). */
-export interface SourceIdMapping {
-  provider: string;
-  sourceEventId: string;
-  canonicalEventId: string;
-}
+export {
+  collapsePunctuation,
+  collapseWhitespace,
+  normalizeCompetition,
+  normalizeTeamName,
+  normalizeText,
+  stripDiacritics,
+} from "./text";
 
-/** Placeholder for a normalization result envelope (Phase 4/5). */
-export interface NormalizationOutcome<T> {
-  normalized: boolean;
-  value?: T;
-  confidence: number;
-}
+export {
+  CompetitionDictionary,
+  COMPETITION_ALIASES,
+  createDefaultCompetitionDictionary,
+  createDefaultTeamDictionary,
+  TEAM_ALIASES,
+  TeamDictionary,
+} from "./dictionaries";
+export type { CompetitionLookup, LookupKind, TeamLookup } from "./dictionaries";
+
+export { classifyMatch, computeMatchConfidence, eventsMatch } from "./matching";
+export type { MatchAssessment, MatchPolicy, MatchSignals, NormalizedEventRef } from "./matching";
+
+export { SourceIdIndex, sourceIdKey } from "./source-ids";
+export type { SourceIdMapping } from "./source-ids";
+
+export { EventNormalizer } from "./registry";
+export type {
+  EventNormalizerOptions,
+  IncomingEventInput,
+  NormalizeAction,
+  NormalizeResult,
+} from "./registry";
+
+export { formatCanonicalLine, MarketNormalizer, marketIdentityKey, toStructure } from "./market";
+export type {
+  MarketDescriptor,
+  MarketKeyCanon,
+  MarketNormalizeResult,
+  MarketResolution,
+  ProviderOutcome,
+} from "./market";
