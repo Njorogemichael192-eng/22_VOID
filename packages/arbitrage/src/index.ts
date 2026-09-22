@@ -43,6 +43,7 @@ export type {
   PruneResult,
   PruneVerdict,
   ScanOptions,
+  SourceStatus,
   StructureType,
 } from "./candidates";
 
@@ -55,3 +56,22 @@ export {
   reciprocalSum,
 } from "./optimizer";
 export type { StakePlan } from "./optimizer";
+
+export {
+  compareRecheckedPrices,
+  formatValidationReport,
+  priceAge,
+  relativeDelta,
+  validateCandidate,
+} from "./validation";
+export type {
+  CrossSourceConsistency,
+  LegValidation,
+  RecheckChange,
+  RecheckResult,
+  RecheckStatus,
+  RecheckedPrice,
+  ValidationFailure,
+  ValidationOptions,
+  ValidationReport,
+} from "./validation";

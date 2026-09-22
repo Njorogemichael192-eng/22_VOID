@@ -2,13 +2,7 @@ import { MarketFamily, Period, SettlementResult } from "@22void/domain";
 import { MIN_DECIMAL_ODDS } from "@22void/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 const PIPELINE = [
   "DATA",
@@ -34,13 +28,13 @@ export default function HomePage() {
           <span className="text-muted-foreground">_VOID</span>
         </h1>
         <p className="max-w-2xl text-muted-foreground">
-          Cloud-hosted, football-first sports-arbitrage research platform. No
-          opportunity is presented unless every possible settlement state is
-          covered and the worst-case return is proven positive.
+          Cloud-hosted, football-first sports-arbitrage research platform. No opportunity is
+          presented unless every possible settlement state is covered and the worst-case return is
+          proven positive.
         </p>
         <div className="flex justify-center gap-3">
-          <Button variant="outline" asChild>
-            <a href="#pipeline">Pipeline</a>
+          <Button asChild>
+            <a href="/dashboard">Open dashboard</a>
           </Button>
         </div>
       </section>
@@ -50,8 +44,7 @@ export default function HomePage() {
           <CardHeader>
             <CardTitle>Detection pipeline</CardTitle>
             <CardDescription>
-              The authoritative arb test is the payoff/state model — never
-              reciprocal sums alone.
+              The authoritative arb test is the payoff/state model — never reciprocal sums alone.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -68,8 +61,8 @@ export default function HomePage() {
         Canonical seed: {MarketFamily.ASIAN_TOTAL} · {Period.FULL_MATCH} ·{" "}
         {SettlementResult.HALF_WIN} · minimum odds {MIN_DECIMAL_ODDS}
         <br />
-        Architectural documents: PROJECT_STATE.md · TECH_STACK.md ·
-        BUILD_AGENT_PROMPT.md · docs/ARBITRAGE_ENGINE_SPEC.md
+        Architectural documents: PROJECT_STATE.md · TECH_STACK.md · BUILD_AGENT_PROMPT.md ·
+        docs/ARBITRAGE_ENGINE_SPEC.md
       </footer>
     </main>
   );

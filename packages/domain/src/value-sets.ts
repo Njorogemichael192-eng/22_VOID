@@ -87,6 +87,14 @@ export const RejectionReason = {
   OPTIMIZATION_FAILED: "OPTIMIZATION_FAILED",
   PROVIDER_ERROR: "PROVIDER_ERROR",
   PROVIDER_UNAVAILABLE: "PROVIDER_UNAVAILABLE",
+  /** Phase 11: attested settlement confidence below the verification floor. */
+  SETTLEMENT_CONFIDENCE_LOW: "SETTLEMENT_CONFIDENCE_LOW",
+  /** Phase 11: source `sourceUpdatedAt` timestamps too far apart (§38 cross-source). */
+  CROSS_SOURCE_TIMESTAMP_SPREAD: "CROSS_SOURCE_TIMESTAMP_SPREAD",
+  /** Phase 11: the final recheck found the price had moved (§39). */
+  PRICE_CHANGED_ON_RECHECK: "PRICE_CHANGED_ON_RECHECK",
+  /** Phase 11: a candidate cannot be verified because provenance is missing or unwritten. */
+  INSUFFICIENT_PROVENANCE: "INSUFFICIENT_PROVENANCE",
 } as const;
 export type RejectionReason = (typeof RejectionReason)[keyof typeof RejectionReason];
 export const REJECTION_REASON_VALUES = valueTuple(Object.values(RejectionReason));

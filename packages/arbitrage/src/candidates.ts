@@ -27,6 +27,9 @@ import type { ArbitrageLeg, CoverageReport } from "./coverage";
 import { optimizeStakes, reciprocalSum } from "./optimizer";
 import type { StakePlan } from "./optimizer";
 
+/** Supplier availability classification (Phase 11 provider/source status). */
+export type SourceStatus = "OK" | "DEGRADED" | "DOWN" | "UNKNOWN";
+
 /** A priced selection ready for candidate generation. Structurally a leg. */
 export interface PricedSelection {
   /** Stable identifier (e.g. normalized selection id + bookmaker). */
@@ -35,7 +38,7 @@ export interface PricedSelection {
   selection: SettleableSelection;
   odds: number;
   bookmaker: string;
-  /** Epoch milliseconds when the price was observed (freshness, Phase 11). */
+  /** Epoch milliseconds when the price was observed (ingestion time, §38). */
   observedAt?: number;
   /** Provider/bookmaker suspension flag; suspended legs are pruned. */
   suspended?: boolean;
@@ -43,6 +46,14 @@ export interface PricedSelection {
   eventConfidence?: number;
   /** Settlement rule version, part of the semantic cache key (§62). */
   settlementRuleVersion?: string;
+  /** Provider key the price originated from (Phase 11 provider/source status). */
+  provider?: string;
+  /** ISO timestamp when the supplier last updated this price (§38 sourceUpdatedAt). */
+  sourceUpdatedAt?: string;
+  /** Supplier availability classification (Phase 11). */
+  sourceStatus?: SourceStatus;
+  /** Attested settlement-rule confidence in [0, 1]; absent means unverified (Phase 11). */
+  settlementConfidence?: number;
 }
 
 export type StructureType =

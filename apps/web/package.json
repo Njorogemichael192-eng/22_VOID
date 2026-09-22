@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@22void/db": "*",
     "@22void/domain": "*",
     "@22void/shared": "*",
     "@radix-ui/react-slot": "^1.2.4",

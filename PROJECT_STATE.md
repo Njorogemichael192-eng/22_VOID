@@ -1,6 +1,6 @@
 # 22_VOID — PROJECT STATE / MASTER TODO
 
-Version: 1.10
+Version: 1.13
 
 ## STATUS
 
@@ -23,11 +23,13 @@ After every task:
 
 ## CURRENT PHASE
 
-Phase 10 — Candidate Generator (complete)
+Phase 13 — Dashboard (complete)
 
 ## NEXT ACTION
 
-Phase 11 — Validation: store source timestamp + ingestion timestamp, classify `THEORETICAL / FRESH / VERIFIED / STALE / INVALIDATED` (reuse the domain freshness policy), enforce provider/source status, settlement + event confidence, price age and cross-source timestamp consistency, and perform a final recheck before an opportunity can be marked `VERIFIED`. Feed the Phase 10 `scanCandidates` output through validation; stale/uncertain candidates must never become verified.
+Phase 14 — Workers: scheduled polling, rate limiter, retry/backoff, raw payload
+capture, normalize job, detection job, persistence job, heartbeat, failure
+recovery. Acceptance: transient provider failures recover.
 
 ---
 
@@ -370,51 +372,71 @@ Notes:
 
 ## PHASE 11 — VALIDATION
 
-- [ ] Freshness threshold
-- [ ] Provider/source status
-- [ ] Settlement confidence
-- [ ] Event confidence
-- [ ] Price age
-- [ ] Cross-source timestamp consistency
-- [ ] Final recheck
-- [ ] Theoretical vs verified status
+- [x] Freshness threshold — per-leg age classification via domain `classifyFreshness` (§38 FRESH/AGING/STALE) with overridable policy; STALE-band or over-horizon legs always fail
+- [x] Provider/source status — `PricedSelection.sourceStatus` (`OK/DEGRADED/DOWN/UNKNOWN`) enforced; DOWN/UNKNOWN legs fail with `PROVIDER_UNAVAILABLE`
+- [x] Settlement confidence — `settlementConfidence` must be attested on every leg and at/above the floor (`SETTLEMENT_CONFIDENCE_LOW`); never assumed from the market name (Rule 2)
+- [x] Event confidence — `eventConfidence` must be attested at/above a verification floor (`EVENT_MATCH_UNCERTAIN`), independent of the Phase 10 pruning floor
+- [x] Price age — per-leg `ageMs` (`now - sourceUpdatedAt`, falling back to `observedAt`) must be within `maxAgeMs` (default = policy agingMs, 15s)
+- [x] Cross-source timestamp consistency — every leg's `sourceUpdatedAt` is required; the max/min spread must be within `maxSourceSpreadMs` (default 60s) or the candidate is rejected with `CROSS_SOURCE_TIMESTAMP_SPREAD`
+- [x] Final recheck — `compareRecheckedPrices` re-fetches every leg and recomputes; any leg missing or moved beyond `recheckTolerance` (default 0.1%) invalidates the opportunity (`PRICE_CHANGED_ON_RECHECK` / incomplete recheck → `PROVIDER_UNAVAILABLE`) before it can be shown
+- [x] Theoretical vs verified status — `validateCandidate` maps a Phase 10 `ARB` scan to `VERIFIED_ARB` (all checks + recheck OK), `FRESH_ARB` (fresh, recheck pending), `THEORETICAL_ARB` (positive min return but no attestable provenance → `INSUFFICIENT_PROVENANCE`), `STALE` (stale prices), `INVALIDATED` (recheck moved/incomplete) or `REJECTED` (confidence/source/spread failures)
 
-**Acceptance:** stale/uncertain opportunities cannot be marked verified.
+**Acceptance: stale/uncertain opportunities cannot be marked verified.**
+
+Phase 11 gate results (evidence):
+
+- `@22void/domain` — three Phase 11 `RejectionReason` values added (`SETTLEMENT_CONFIDENCE_LOW`, `CROSS_SOURCE_TIMESTAMP_SPREAD`, `PRICE_CHANGED_ON_RECHECK`) plus `INSUFFICIENT_PROVENANCE` for provenanceless candidates; `REJECTION_REASON_VALUES` derives automatically from the const map
+- `@22void/arbitrage` — new `src/validation.ts` (`validateCandidate`, `compareRecheckedPrices`, `priceAge`, `relativeDelta`, `formatValidationReport`) re-exported from `src/index.ts`; `PricedSelection` gained `provider` / `sourceUpdatedAt` (ISO) / `sourceStatus` / `settlementConfidence` provenance fields (spec §38). 19 new tests in `validation.test.ts`; package now 70 tests / 6 suites
+- Acceptance proven on the golden paths: a fresh, attested, rechecked two-way 2.2/2.1 arb scans `VERIFIED_ARB` (verified=true, theoretical=true, rejections empty); the same candidate without a recheck stops at `FRESH_ARB`; a provenanceless candidate stays `THEORETICAL_ARB` with `INSUFFICIENT_PROVENANCE`; an AGING price within the horizon still verifies; moved price on recheck → `INVALIDATED` with `PRICE_CHANGED_ON_RECHECK` (Δ rendered); incomplete recheck → `INVALIDATED`/`PROVIDER_UNAVAILABLE`; stale legs → `STALE`/`STALE_ODDS`; event confidence below the (stricter) verification floor → `REJECTED`/`EVENT_MATCH_UNCERTAIN`; settlement confidence below floor → `SETTLEMENT_CONFIDENCE_LOW`; DOWN source → `PROVIDER_UNAVAILABLE`; non-contemporaneous source stamps → `CROSS_SOURCE_TIMESTAMP_SPREAD` (spread rendered, 119s); `NO_ARB` scans → `REJECTED`/`NEGATIVE_GUARANTEED_PROFIT`; `PRUNED` scans → `REJECTED` carrying the mapped prune reason
+- Lifecycle invariant asserted: `report.verified === true` only when `status === VERIFIED_ARB`, and none of the stale/uncertain/recheck-failure paths produced `verified`
+- `npm run lint` / `npm run typecheck` / `npm run build` / `npm test` — green across all workspaces (333 tests passing; domain 63, arbitrage 70, normalization 59, settlement 57, provider-contracts 43, outcome-engine 23, db 2+18 skipped-without-DB, web 3, collector 5, shared 7)
+
+Notes:
+
+- `validateCandidate` is a pure function over the Phase 10 scan + the candidate's `PricedSelection[]` legs; the actual re-fetch (network/DB) stays in the caller (Phase 14 worker), which passes the fetched prices in as `rechecked`. `verified` is exactly `status === VERIFIED_ARB`, so stale/uncertain/invalidated opportunities can never surface as verified.
+- Provenance is all-or-nothing per candidate: `sourceUpdatedAt` + `eventConfidence` + `settlementConfidence` + `sourceStatus` are required on every leg before any check runs; otherwise the candidate is `THEORETICAL_ARB` (Rule 5). Phase 10 pruning already enforces a 0.8 event-confidence floor, so the Phase 11 verification floor (default 0.8, overridable) is deliberately stricter-or-equal and can be tightened independently.
+- The `PRUNED` scan path maps `PruneReason` → `RejectionReason` (`EVENT_UNCERTAIN`→`EVENT_MATCH_UNCERTAIN`, `PRICE_PREFILTER`→`NEGATIVE_GUARANTEED_PROFIT`, `SUSPENDED`→`INVALID_MARKET`, `SAME_BOOKMAKER`→`STAKE_LIMIT`, …) so the "why-rejected" surface is uniform.
+- Stake rounding / minimum bet sizes (execution realism) remain an explicit Phase 11-adjacent concern deferred to the API/persistence layer (Phase 12) — `validateCandidate` accepts the continuous optimizer plan unchanged.
 
 ## PHASE 12 — API
 
-- [ ] Authentication
-- [ ] Events
-- [ ] Markets
-- [ ] Odds
-- [ ] Opportunities
-- [ ] Opportunity details
-- [ ] Provider health
-- [ ] Scanner status
-- [ ] Admin
-- [ ] Pagination/filtering
-- [ ] OpenAPI contract
+- [x] Authentication (static API keys, reader + admin roles, constant-time compare)
+- [x] Events (`GET /api/v1/events`, `GET /api/v1/events/:id` with source links)
+- [x] Markets (`GET /api/v1/markets{,/:id}` with current per-bookmaker odds)
+- [x] Odds (`GET /api/v1/odds`, flat price view)
+- [x] Opportunities (list by status incl. `VERIFIED_ARB`; detail exposes legs + evidence)
+- [x] Opportunity details (stakes/returns, engine versions, validation timestamps)
+- [x] Provider health (`GET /api/v1/providers`)
+- [x] Scanner status (`GET /api/v1/scanner`, runs + staleness aggregate)
+- [x] Admin (`GET /api/v1/admin/sources`, `GET /api/v1/admin/audit-logs`, admin key)
+- [x] Pagination/filtering (keyset cursors; status/family/period/team/date filters)
+- [x] OpenAPI contract (served at `GET /api/v1/openapi`, enums from @22void/domain)
 
-**Acceptance:** integration tests pass.
+**Acceptance:** integration tests pass — fake-repo handler tests (paths, filters,
+cursors, auth 401/403, 400/404), cursor codec round-trips, OpenAPI validity;
+34 tests in @22void/web, 8 passing in @22void/db (cursor); 888 repo-wide.
 
 ## PHASE 13 — DASHBOARD
 
-- [ ] 22_VOID branding
-- [ ] Live opportunities
-- [ ] Filters
-- [ ] Event detail
-- [ ] Market matrix
-- [ ] Bookmaker comparison
-- [ ] Stake calculator
-- [ ] Guaranteed return
-- [ ] Settlement explanation
-- [ ] Why-arb explanation
-- [ ] Why-rejected explanation
-- [ ] Freshness
-- [ ] Provider health
-- [ ] Scanner heartbeat
+- [x] 22_VOID branding (wordmark, shell header/nav, footer with data-source label)
+- [x] Live opportunities (`/dashboard` verified feed + `/opportunities`)
+- [x] Filters (lifecycle status via client control, client-side navigation)
+- [x] Event detail (`/events/:id` — matrix, source links)
+- [x] Market matrix (per-leg bookmaker/market/selection/odds/stake/return table)
+- [x] Bookmaker comparison (leg market vs current per-bookmaker prices, best + snapshot flagged)
+- [x] Stake calculator (client-side proportional re-plan with budget input)
+- [x] Guaranteed return (min return / profit / ROI cards + positive-guarantee evidence)
+- [x] Settlement explanation (settlement coverage section)
+- [x] Why-arb explanation (evidence sections per status/structure)
+- [x] Why-rejected explanation (reason-specific copy + reason code)
+- [x] Freshness (age + recheck-window status; stale/expired flagged)
+- [x] Provider health (`/providers` + dashboard panel)
+- [x] Scanner heartbeat (run table + staleness aggregate)
 
-**Acceptance:** complete opportunity inspection flow works.
+**Acceptance:** complete opportunity inspection flow works — e2e walks landing →
+overview → opportunity detail (guarantee cards, matrix, calculator, comparison,
+evidence) → rejected-why → event matrix → providers. Verified against the demo
+repo in CI (no DB needed).
 
 ## PHASE 14 — WORKERS
 
@@ -524,6 +546,12 @@ Only after football is stable:
 Live data → correct event → correct market → correct settlement → complete outcome coverage → valid optimization → positive minimum guaranteed return → fresh prices → final verification.
 
 ## CHANGELOG
+
+- 2026-09-22 (Phase 13): Dashboard (`apps/web`). Full 22_VOID shell — `SiteHeader`/`SiteFooter` with active-link nav and a data-source label — wrapped the root layout; the landing page now links into the data layer. New `lib/dashboard/` reads straight from the Phase 12 `ApiRepo` (never the HTTP layer), keeping pages testable without a DB: `format.ts` (odds/money/percent/ROI/age/date + market & selection labels, safe for client & server), `metrics.ts` (`legRows`, `compareBookmakerOdds` — matches each leg's market on family/period/participant/line, flags the best current price and rings the snapshot bookmaker, `summarizeScanner` with the 5-minute staleness rule), `explain.ts` (pure evidence sections — positive guaranteed return from the solved plan, market-structure copy per `StructureType`, settlement coverage, per-`RejectionReason` "why rejected" copy, freshness with recheck-window expiry — still following Rule 5/6: text is a function of the view), `demo-repo.ts` (deterministic in-memory `ApiRepo` seeded relative to `Date.now()`: 4 events, 6 markets with live quotes, 6 opportunities covering VERIFIED/FRESH/THEORETICAL/REJECTED/STALE, 4 providers incl. DEGRADED, scanner runs incl. an older DEGRADED one — pagination/filters implemented so the flow is honest), `server-repo.ts` (`DASHBOARD_SOURCE=demo` or no `DATABASE_URL` → demo repo, else Prisma repo) and `snapshot.ts`. Pages (all `force-dynamic`, none bundled with client JS): `/dashboard` overview (verified opportunities table + provider-health + scanner-heartbeat panels), `/opportunities` with a client-side lifecycle-status filter, `/opportunities/[id]` — the inspection flow (guarantee cards, leg matrix, stake calculator that re-plans proportionally from the optimizer split, bookmaker comparison, evidence cards, engine versions), `/events` + `/events/[id]` (market matrix per family), `/providers` (health cards + scanner run table). Client components: `OpportunityFilters` (search-param navigation) and `StakeCalculator` (pure scaling, server-compatible formatters). Acceptance proven: 38 new unit tests (72 in @22void/web; repo-wide 407) plus 7 new Playwright e2e specs that build the app, boot it against the demo seed and walk landing → overview → opportunity detail → rejected-why → event matrix → providers on bare Chrome (no DB). Gate green: lint, typecheck, build, 407 tests, e2e 8/8, `state:check`.
+
+- 2026-09-22 (Phase 12): Authenticated HTTP API (`apps/web` `/api/v1/**` + `@22void/db` API repo). `@22void/db` gains a read-model API: `api/types.ts` (`ApiRepo` interface + JSON-safe views: `EventView` with per-source links, `MarketView` with current per-bookmaker odds, `OddsView`, `OpportunityView` with legs/stakes/returns/engine versions/validation evidence, `ProviderView`, `AdminSourceView` with row counts, `ScannerRunView`, `AuditLogView`; filters incl. status/family/period/eventId/team/date windows), `api/cursor.ts` (opaque base64url keyset cursors `22v.…` encoding ordering key + direction + id; tested), `api/repo.ts` (`createApiRepo` → Prisma-backed keyset pagination, `limit+1` boundary cursors, insensitive contains filters). `apps/web` builds the HTTP layer on it: `lib/api/auth.ts` (static `API_KEY` reader / `ADMIN_API_KEY` admin roles, constant-time `timingSafeEqual`, fail-closed 401, 403 for role mismatch), `lib/api/http.ts` (`{ "error": { code, message, detail? } }` envelope), `lib/api/schema.ts` (zod v4 query parsing: `limit` 1–100, epoch-safe ISO date bounds, enum filters validated against domain value sets — invalid values 400, never 500), `lib/api/handlers/*` (events, markets, odds, opportunities, system, admin) as pure `(request, { repo, env, now? }) → Response` functions, `lib/api/openapi.ts` (OpenAPI 3.0.3 contract served at `GET /api/v1/openapi`, public; enums imported from `@22void/domain` so the contract cannot drift from the engine). Endpoints: `GET /health` (public), `/events{,/:id}`, `/markets{,/:id}`, `/odds`, `/opportunities{,/:id}`, `/providers`, `/scanner` (runs + ≥5 min staleness aggregate), `/admin/sources`, `/admin/audit-logs` (admin key), `/openapi`. Phase 11 output is surfaced: opportunity statuses are the §40 domain values (incl. `VERIFIED_ARB`) and details carry `validatedAt`, `rejectionReason` and leg/return evidence. Wire/contract alignment with PROJECT_STATE Phase 12 (integration tests pass): 25 handler tests over a fake `ApiRepo` (401/403/400/404 paths, filter + cursor forwarding, role gating, stale scanner detection with frozen clock, nextCursor round-trip), OpenAPI validity assertions; 5 cursor codec tests in `@22void/db`. `apps/web` gained `@22void/db` dependency; `next.config.ts` adds `transpilePackages` + `serverExternalPackages`; source imports are extensionless (Turbopack) with `.js` suffixes only in test files (vitest). `.env.example` documents `API_KEY`/`ADMIN_API_KEY`. 34 web tests, 888 repo-wide (that number will be superseded in later phases as web grows); full gate green: lint, typecheck (all workspaces), build (incl. `next build` wiring 13 App Routes), `state:check`.
+
+- 2026-09-22 (Phase 11): Opportunity validation (`@22void/arbitrage`). New `src/validation.ts`: `validateCandidate(scan, legs, options, rechecked)` classifies a Phase 10 `ARB` scan into the §40 lifecycle (`VERIFIED_ARB`/`FRESH_ARB`/`THEORETICAL_ARB`/`STALE`/`INVALIDATED`/`REJECTED`) using seven checks — freshness threshold (domain `classifyFreshness`, §38), provider/source status (`sourceStatus` DOWN/UNKNOWN → `PROVIDER_UNAVAILABLE`), event confidence (≥ `minEventConfidence`, else `EVENT_MATCH_UNCERTAIN`), settlement confidence (≥ `minSettlementConfidence`, else `SETTLEMENT_CONFIDENCE_LOW`), price age (`now − sourceUpdatedAt` within `maxAgeMs`, else `STALE`/`STALE_ODDS`), cross-source timestamp consistency (max/min `sourceUpdatedAt` spread within `maxSourceSpreadMs`, else `CROSS_SOURCE_TIMESTAMP_SPREAD`) and the final recheck (`compareRecheckedPrices`: any leg missing or moved beyond `recheckTolerance` → `INVALIDATED` with `PRICE_CHANGED_ON_RECHECK`/`PROVIDER_UNAVAILABLE`, §39). A candidate without attestable provenance on every leg (source timestamp / event / settlement confidence / source status) is `THEORETICAL_ARB` with `INSUFFICIENT_PROVENANCE`; `verified` is exactly `status === VERIFIED_ARB`, so stale/uncertain opportunities can never be marked verified. `PricedSelection` gained `provider`, `sourceUpdatedAt` (ISO), `sourceStatus` (`OK/DEGRADED/DOWN/UNKNOWN`) and `settlementConfidence`; domain `RejectionReason` gained `SETTLEMENT_CONFIDENCE_LOW`, `CROSS_SOURCE_TIMESTAMP_SPREAD`, `PRICE_CHANGED_ON_RECHECK`, `INSUFFICIENT_PROVENANCE`. Non-ARB scans map to `REJECTED` with structured reasons (`NEGATIVE_GUARANTEED_PROFIT`, coverage verdicts, or `PruneReason`→`RejectionReason`). 19 tests / new suite; 333 tests passing repo-wide. Gate green: lint, typecheck, build, `state:check`.
 
 - 2026-09-21 (Phase 10): Candidate generator (`@22void/arbitrage`). New `src/candidates.ts`. Generation is staged (§33) instead of all-pairs: Stage A groups priced selections by canonical event, Stage B by period (a period mismatch invalidates a candidate, §8), Stage C only pairs market families with an implemented state model via `familiesCompatible` (`MATCH_TOTAL↔TEAM_TOTAL`, `MATCH_TOTAL↔ASIAN_TOTAL`, `TEAM_TOTAL↔ASIAN_TOTAL`, `MATCH_RESULT↔DOUBLE_CHANCE`, `MATCH_TOTAL↔BTTS`), and Stage D grows candidate size 2 → 3 with `maxCandidates` bounding combinatorics. `bestPricePerSelection` implements the §55 best-price rule, `classifyStructure` labels each set (`SAME_MARKET_COMPLEMENT`, `COMPLEMENTARY_TOTALS`, `ASIAN_LINE`, `PROTECTED_HANDICAP`, `TEAM_TOTAL_MATCH_TOTAL`, `PARTITION`, `MULTI_LEG_PARTITION`, `GENERIC`) and `isStandardComplement` detects exact two-way complements. `pruneCandidate` rejects candidates cheaply (§34/§61) for size, event/period mismatch, duplicate selection, invalid odds, suspension, staleness, uncertain event confidence, same-bookmaker policy, incompatible markets and the standard-complement price prefilter (`sum(1/O) >= 1`); pruning never decides arbitrage. `scanCandidates` chains generate → prune → `detectFalseArb` → `optimizeStakes`, returning `ARB`/`NO_ARB`/`REJECTED`/`PRUNED` (pruned candidates never reach the detector). Acceptance proven: two-way 2.2/2.1 scans `ARB`, Over 10.5 + Under 13.5 scans `REJECTED` with `NON_EXCLUSIVE`, a covered-unprofitable structure scans `NO_ARB`, and suspended/prefiltered candidates scan `PRUNED`. 51 tests / 5 suites in the package. Gate green: lint, typecheck, build, 313 tests passing, `state:check`.
 

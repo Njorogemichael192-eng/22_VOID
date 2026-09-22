@@ -9,16 +9,37 @@
  * scanner health (plus raw payload retention, spec §65).
  */
 
-import { createPrismaClient } from "./client.js";
+import { createPrismaClient } from "./client";
 
-export { createPrismaClient, getPrismaClient, prisma } from "./client.js";
+export { createPrismaClient, getPrismaClient, prisma } from "./client";
 export * from "./generated/client/client";
 export {
   storeRawPayload,
   ensureOddsSource,
   type StoreRawPayloadInput,
   type OddsSourceLink,
-} from "./raw-payloads.js";
+} from "./raw-payloads";
+export { encodeCursor, decodeCursor, type Cursor, type CursorDirection } from "./api/cursor";
+export { createApiRepo } from "./api/repo";
+export type {
+  Page,
+  EventFilter,
+  MarketFilter,
+  OddsFilter,
+  OpportunityFilter,
+  AuditLogFilter,
+  EventView,
+  EventSourceLinkView,
+  MarketView,
+  OddsView,
+  OpportunityView,
+  OpportunityLegView,
+  ProviderView,
+  AdminSourceView,
+  ScannerRunView,
+  AuditLogView,
+  ApiRepo,
+} from "./api/types";
 
 /** Minimal health probe shape for the persistence layer. */
 export interface DbHealth {
