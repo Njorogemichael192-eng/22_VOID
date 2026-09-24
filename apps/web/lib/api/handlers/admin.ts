@@ -7,7 +7,7 @@
  * expose the §66 trail (who did what to which entity, with JSON detail).
  */
 
-import { requireAuth } from "../auth";
+import { guardRequest } from "../../security/guard";
 import { jsonOk } from "../http";
 import {
   auditLogListQuerySchema,
@@ -19,7 +19,7 @@ import {
 import { pagination, type HandlerDeps } from "./common";
 
 export async function listAdminSources(request: Request, deps: HandlerDeps): Promise<Response> {
-  const auth = requireAuth(request, deps.env, "admin");
+  const auth = guardRequest(request, deps, "admin");
   if (auth instanceof Response) return auth;
 
   const sources = await deps.repo.listAdminSources();
@@ -27,7 +27,7 @@ export async function listAdminSources(request: Request, deps: HandlerDeps): Pro
 }
 
 export async function listAuditLogs(request: Request, deps: HandlerDeps): Promise<Response> {
-  const auth = requireAuth(request, deps.env, "admin");
+  const auth = guardRequest(request, deps, "admin");
   if (auth instanceof Response) return auth;
 
   const parsed = parseQuery(request, auditLogListQuerySchema);

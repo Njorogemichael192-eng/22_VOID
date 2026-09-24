@@ -7,23 +7,37 @@ import {
   type AuditLogFilter,
   type AuditLogView,
   type Cursor,
+  type EpisodeReconstruction,
   type EventFilter,
   type EventView,
+  type FalsePositiveReport,
+  type HistoryRepo,
   type MarketFilter,
   type MarketView,
   type OddsFilter,
+  type OddsHistoryPoint,
   type OddsView,
+  type OpportunityEpisodeSummary,
   type OpportunityFilter,
   type OpportunityView,
   type Page,
   type ProviderView,
   type ScannerRunView,
+  type SourceLatencyStat,
 } from "@22void/db";
 import { listAdminSources, listAuditLogs } from "./handlers/admin.js";
 import { listEvents, getEvent } from "./handlers/events.js";
 import { listMarkets, getMarket, listOdds } from "./handlers/markets.js";
 import { listOpportunities, getOpportunity } from "./handlers/opportunities.js";
 import { listProviders, scannerStatus, health } from "./handlers/system.js";
+import {
+  falsePositiveAnalysis,
+  getEpisodeReconstruction,
+  listEpisodes,
+  listOddsHistory,
+  sourceLatency,
+  type HistoryHandlerDeps,
+} from "./handlers/history.js";
 import type { HandlerDeps } from "./handlers/common.js";
 import { openApiDocument } from "./openapi.js";
 
@@ -237,6 +251,148 @@ function createFakeRepo(calls: FakeCalls): ApiRepo {
 
 function deps(calls: FakeCalls, overrides: Partial<HandlerDeps> = {}): HandlerDeps {
   return { repo: createFakeRepo(calls), env, ...overrides };
+}
+
+function episodeSummary(overrides: Partial<OpportunityEpisodeSummary> = {}): OpportunityEpisodeSummary {
+  return {
+    id: "ep_1",
+    eventCanonicalId: "canon-evt-1",
+    competition: "UEFA Champions League",
+    homeTeam: "Team A",
+    awayTeam: "Team B",
+    startTime: "2026-10-01T19:00:00.000Z",
+    structureType: "1X2",
+    marketStructure: "1X2",
+    status: "STALE",
+    firstSeenAt: "2026-10-01T18:30:00.000Z",
+    lastSeenAt: "2026-10-01T18:35:00.000Z",
+    detectedCount: 3,
+    disappearedAt: "2026-10-01T18:35:20.000Z",
+    durationMs: 300000,
+    ...overrides,
+  };
+}
+
+function reconstruction(overrides: Partial<EpisodeReconstruction> = {}): EpisodeReconstruction {
+  return {
+    episode: episodeSummary(),
+    detections: [
+      {
+        id: "opp_1",
+        status: "STALE",
+        rejectionReason: null,
+        marketStructure: "1X2",
+        detectedAt: "2026-10-01T18:30:00.000Z",
+        validatedAt: null,
+        totalStake: 100,
+        guaranteedProfit: 2.5,
+        roi: 0.025,
+        legs: [{ selectionId: "sel_1", oddsSnapshot: 2.1, stake: 48.8, guaranteedReturn: 102.5 }],
+      },
+    ],
+    legs: [
+      {
+        selectionId: "sel_1",
+        bookmaker: "Pinnacle",
+        outcome: "HOME",
+        market: {
+          family: "MATCH_RESULT",
+          marketType: "1X2",
+          period: "FULL_MATCH",
+          participant: null,
+          line: null,
+        },
+        snapshotOdds: 2.1,
+        history: [oddsHistoryPoint()],
+        movement: { first: 2.1, last: 2.05, min: 2.05, max: 2.1, delta: -0.05, pctChange: -0.0238 },
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function oddsHistoryPoint(overrides: Partial<OddsHistoryPoint> = {}): OddsHistoryPoint {
+  return {
+    selectionId: "sel_1",
+    eventCanonicalId: "canon-evt-1",
+    family: "MATCH_RESULT",
+    marketType: "1X2",
+    period: "FULL_MATCH",
+    participant: null,
+    line: null,
+    outcome: "HOME",
+    bookmaker: "Pinnacle",
+    odds: 2.1,
+    observedAt: "2026-10-01T18:30:00.000Z",
+    ...overrides,
+  };
+}
+
+function latencyStat(overrides: Partial<SourceLatencyStat> = {}): SourceLatencyStat {
+  return {
+    sourceKey: "pinnacle",
+    runs: 300,
+    avgMs: 145,
+    minMs: 60,
+    maxMs: 480,
+    lastRunAt: "2026-10-01T18:29:00.000Z",
+    lastLatencyMs: 120,
+    ...overrides,
+  };
+}
+
+function falsePositiveReport(overrides: Partial<FalsePositiveReport> = {}): FalsePositiveReport {
+  return {
+    episodes: 10,
+    active: 4,
+    concluded: 6,
+    verified: 4,
+    falsePositives: 2,
+    falsePositiveRate: 0.3333,
+    byStatus: [{ status: "STALE", count: 1, avgDurationMs: 420000 }],
+    topRejectionReasons: [{ reason: "odds_moved", count: 2 }],
+    ...overrides,
+  };
+}
+
+interface FakeHistoryCalls {
+  episodeFilter?: unknown;
+  oddsFilter?: unknown;
+  latencyFilter?: unknown;
+  analysisFilter?: unknown;
+  requestedEpisodeId?: string | null;
+}
+
+function createFakeHistoryRepo(calls: FakeHistoryCalls, episodes: OpportunityEpisodeSummary[] = [episodeSummary()]): HistoryRepo {
+  return {
+    async listEpisodes(filter) {
+      calls.episodeFilter = filter;
+      return episodes;
+    },
+    async getEpisodeReconstruction(id) {
+      calls.requestedEpisodeId = id;
+      return id === "ep_1" ? reconstruction() : null;
+    },
+    async listOddsHistory(filter) {
+      calls.oddsFilter = filter;
+      return [oddsHistoryPoint()];
+    },
+    async sourceLatency(filter) {
+      calls.latencyFilter = filter;
+      return [latencyStat()];
+    },
+    async falsePositiveAnalysis(filter) {
+      calls.analysisFilter = filter;
+      return falsePositiveReport();
+    },
+  };
+}
+
+function historyDeps(
+  calls: FakeHistoryCalls,
+  overrides: Partial<HistoryHandlerDeps> = {},
+): HistoryHandlerDeps {
+  return { repo: createFakeHistoryRepo(calls), env, ...overrides };
 }
 
 describe("GET /api/v1/events", () => {
@@ -523,6 +679,135 @@ describe("admin endpoints", () => {
   });
 });
 
+describe("history endpoints", () => {
+  it("requires an API key", async () => {
+    const response = await listEpisodes(get("http://test.local/api/v1/history/opportunities"), {
+      ...historyDeps({}),
+    });
+    expect(response.status).toBe(401);
+    expect(await body(response)).toMatchObject({ error: { code: "UNAUTHORIZED" } });
+  });
+
+  it("lists episodes and forwards eventId and status filters", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await listEpisodes(
+      get(
+        "http://test.local/api/v1/history/opportunities?eventId=canon-evt-1&status=STALE&limit=5",
+        READER_KEY,
+      ),
+      historyDeps(calls),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: OpportunityEpisodeSummary[] };
+    expect(payload.data[0]).toMatchObject({ id: "ep_1", durationMs: 300000 });
+    expect(calls.episodeFilter).toMatchObject({
+      eventCanonicalId: "canon-evt-1",
+      status: "STALE",
+      limit: 5,
+    });
+  });
+
+  it("defaults the episode list limit to 50", async () => {
+    const calls: FakeHistoryCalls = {};
+    await listEpisodes(get("http://test.local/api/v1/history/opportunities", READER_KEY), historyDeps(calls));
+    expect(calls.episodeFilter).toMatchObject({ limit: 50 });
+  });
+
+  it("returns a full reconstruction for a known episode", async () => {
+    const response = await getEpisodeReconstruction(
+      get("http://test.local/api/v1/history/opportunities/ep_1", READER_KEY),
+      historyDeps({}),
+      "ep_1",
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: EpisodeReconstruction };
+    expect(payload.data.episode.id).toBe("ep_1");
+    expect(payload.data.legs[0]?.history[0]?.odds).toBe(2.1);
+    expect(payload.data.legs[0]?.movement.delta).toBe(-0.05);
+  });
+
+  it("answers 404 for an unknown episode", async () => {
+    const response = await getEpisodeReconstruction(
+      get("http://test.local/api/v1/history/opportunities/nope", READER_KEY),
+      historyDeps({}),
+      "nope",
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects a malformed episode id with 400", async () => {
+    const response = await getEpisodeReconstruction(
+      get("http://test.local/api/v1/history/opportunities/x", READER_KEY),
+      historyDeps({}),
+      "x".repeat(65),
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("requires selectionId or eventId for odds history", async () => {
+    const response = await listOddsHistory(
+      get("http://test.local/api/v1/history/odds", READER_KEY),
+      historyDeps({}),
+    );
+    expect(response.status).toBe(400);
+    expect(await body(response)).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("returns the odds series for a selection and forwards bounds", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await listOddsHistory(
+      get(
+        "http://test.local/api/v1/history/odds?selectionId=sel_1&from=2026-10-01T18:00:00.000Z&to=2026-10-01T19:00:00.000Z",
+        READER_KEY,
+      ),
+      historyDeps(calls),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: OddsHistoryPoint[] };
+    expect(payload.data[0]?.bookmaker).toBe("Pinnacle");
+    expect(calls.oddsFilter).toMatchObject({
+      selectionId: "sel_1",
+      from: "2026-10-01T18:00:00.000Z",
+      to: "2026-10-01T19:00:00.000Z",
+      limit: 50,
+    });
+  });
+
+  it("supports the event-wide odds series via eventId", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await listOddsHistory(
+      get("http://test.local/api/v1/history/odds?eventId=canon-evt-1", READER_KEY),
+      historyDeps(calls),
+    );
+    expect(response.status).toBe(200);
+    expect(calls.oddsFilter).toMatchObject({ eventCanonicalId: "canon-evt-1" });
+  });
+
+  it("returns source latency statistics", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await sourceLatency(
+      get("http://test.local/api/v1/history/latency?sourceKey=pinnacle", READER_KEY),
+      historyDeps(calls),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: SourceLatencyStat[] };
+    expect(payload.data[0]).toMatchObject({ sourceKey: "pinnacle", avgMs: 145 });
+    expect(calls.latencyFilter).toMatchObject({ sourceKey: "pinnacle" });
+  });
+
+  it("returns the false-positive report", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await falsePositiveAnalysis(
+      get("http://test.local/api/v1/history/analysis?after=2026-10-01T00:00:00.000Z", READER_KEY),
+      historyDeps(calls),
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: FalsePositiveReport };
+    expect(payload.data).toMatchObject({ episodes: 10, falsePositiveRate: 0.3333 });
+    expect(calls.analysisFilter).toMatchObject({ after: "2026-10-01T00:00:00.000Z" });
+  });
+});
+
 describe("cursor codec integration", () => {
   it("round-trips a cursor through encode and decode", () => {
     const cursor: Cursor = { value: "2026-10-01T19:00:00.000Z", direction: -1, id: "opp_1" };
@@ -564,6 +849,11 @@ describe("openapi contract", () => {
         "/scanner",
         "/admin/sources",
         "/admin/audit-logs",
+        "/history/opportunities",
+        "/history/opportunities/{id}",
+        "/history/odds",
+        "/history/latency",
+        "/history/analysis",
       ]),
     );
   });

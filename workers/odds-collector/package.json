@@ -15,10 +15,16 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/main.ts"
   },
   "dependencies": {
-    "@22void/provider-contracts": "0.0.0"
+    "@22void/arbitrage": "0.0.0",
+    "@22void/db": "0.0.0",
+    "@22void/domain": "0.0.0",
+    "@22void/normalization": "0.0.0",
+    "@22void/provider-contracts": "0.0.0",
+    "@22void/settlement": "0.0.0",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

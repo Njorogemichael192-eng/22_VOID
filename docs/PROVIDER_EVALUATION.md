@@ -82,10 +82,37 @@ terms are negotiated. It is deliberately NOT the initial provider.
 
 ## Rights / compliance notes (Phase 16 re-verification point)
 
+Re-verified 2026-09-24 (Phase 16 — SECURITY). Unchanged from Phase 3 with one
+addition (rotation):
+
 - The Odds API Pty Ltd ACN 627461947 TOS: no resale/repackaging of the raw
   feed as a standalone product; no re-licensing the data to third parties for
   their commercial products; storage/dashboards/derived analytics allowed.
 - ParlayAPI: free tier non-commercial only; commercial use requires Business
   plan + attribution; redistribution requires a written agreement.
-- API keys live server-side only (`ODDS_API_KEY`, `PARLAY_API_KEY` in
-  `.env.example`; never committed, never in the browser bundle).
+- **Key rotation (incident)**: a real Dell-free-tier ParlayAPI key was found
+  committed in `.env.example` (introduced during Phase 3 exploration). It has
+  been removed from the working tree and `npm run security:scan` now gates CI
+  against committed credentials. The key is irrecoverable in git history
+  (remote `origin` has it) — **rotate/revoke it in the ParlayAPI console**.
+  Both provider keys are server-side env only, never in the browser bundle.
+- **Authorized access only**: 22_VOID polls provider REST endpoints with its
+  own API keys, honoring advertised quotas. It never bypasses bookmaker
+  CAPTCHA, bot detection, authentication, geo controls, rate limits or access
+  controls. Bookmaker accounts/placement are out of scope; this is a pricing
+  research platform.
+- **Rate limiting is two-layered**: the collector's token bucket throttles
+  provider polling (spec §38/§72); the API's per-IP token bucket protects
+  `/api/v1/*` (Phase 16). Both are quota preservation, not evasions.
+- **Data minimization**: raw provider payloads are retained only for debugging
+  (spec §65 retention; not publicly served), keys never appear in payloads,
+  and the dashboard shows no account/credential data.
+- **Kenya / Africa**: no African bookmakers in either catalogue; Kenyan
+  licensing/ops compliance is an operator-level concern, not a feed-level one.
+
+## The Odds API vs ParlayAPI — Phase 16 consolidation
+
+Nothing changed the Phase 3 decision. The Odds API remains the initial
+provider; ParlayAPI remains "Provider B" (Phase 19) pending exact wire-shape
+verification and commercial terms. Phase 19 will also re-check the Asian
+quarter-line coverage gap above.

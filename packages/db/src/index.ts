@@ -19,8 +19,56 @@ export {
   type StoreRawPayloadInput,
   type OddsSourceLink,
 } from "./raw-payloads";
+export {
+  persistCanonicalRun,
+  toSelectionOutcomeType,
+  loadPricedSelections,
+  markSourceStatus,
+  recordHeartbeat,
+  persistOpportunity,
+  type PersistEventInput,
+  type PersistEventSourceInput,
+  type PersistMarketInput,
+  type PersistSelectionInput,
+  type PersistInvalidRef,
+  type PersistCanonicalRunInput,
+  type PersistCanonicalRunResult,
+  type DbSourceStatus,
+  type DbPricedSelection,
+  type RecordHeartbeatInput,
+  type HeartbeatRow,
+  type PersistOpportunityLegInput,
+  type PersistOpportunityAuditInput,
+  type PersistOpportunityInput,
+} from "./store";
+export {
+  computeOpportunityKey,
+  legKeyFromSelectionIds,
+  loadOddsHistory,
+  listOpportunityEpisodes,
+  getEpisodeReconstruction,
+  sweepOpportunityEpisodes,
+  sourceLatencyStats,
+  falsePositiveAnalysis,
+  type OddsHistoryFilter,
+  type OddsHistoryPoint,
+  type OpportunityEpisodeSummary,
+  type ListEpisodeOptions,
+  type LegMovement,
+  type LegReconstructionView,
+  type DetectionSnapshotView,
+  type EpisodeReconstruction,
+  type OpportunityEpisodeUpsertInput,
+  type OpportunityEpisodeUpsertResult,
+  type ReconcileResult,
+  type SourceLatencyStat,
+  type SourceLatencyOptions,
+  type FalsePositiveByStatus,
+  type FalsePositiveReport,
+} from "./history";
 export { encodeCursor, decodeCursor, type Cursor, type CursorDirection } from "./api/cursor";
-export { createApiRepo } from "./api/repo";
+export { writeAuditLog, type WriteAuditLogInput } from "./audit";
+export { createApiRepo, createHistoryRepo } from "./api/repo";
 export type {
   Page,
   EventFilter,
@@ -39,6 +87,11 @@ export type {
   ScannerRunView,
   AuditLogView,
   ApiRepo,
+  HistoryRepo,
+  EpisodeHistoryFilter,
+  OddsHistoryFilterView,
+  SourceLatencyFilter,
+  FalsePositiveFilter,
 } from "./api/types";
 
 /** Minimal health probe shape for the persistence layer. */

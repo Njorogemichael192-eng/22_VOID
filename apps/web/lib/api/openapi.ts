@@ -80,6 +80,7 @@ export const openApiDocument: OpenApiDocument = {
     { name: "opportunities", description: "Detected / validated arbitrage candidates" },
     { name: "system", description: "Health, provider status, scanner heartbeats" },
     { name: "admin", description: "Admin-key endpoints (sources, audit logs)" },
+    { name: "history", description: "Phase 15 historical reconstruction and analysis" },
   ],
   paths: {
     "/health": {
@@ -360,6 +361,165 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    "/history/opportunities": {
+      get: {
+        tags: ["history"],
+        summary: "Opportunity episodes (grouped detections with duration)",
+        parameters: [
+          { $ref: "#/components/parameters/limit" },
+          {
+            name: "eventId",
+            in: "query",
+            description: "Canonical event id (EventView.canonicalEventId)",
+            schema: { type: "string" },
+          },
+          {
+            name: "status",
+            in: "query",
+            schema: { $ref: "#/components/schemas/OpportunityStatus" },
+          },
+        ],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "Episodes, latest first",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/OpportunityEpisode" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+    "/history/opportunities/{id}": {
+      get: {
+        tags: ["history"],
+        summary: "Full reconstruction of one opportunity episode",
+        description:
+          "Stitches the episode, its per-detection snapshots and each leg's odds price series (with movement) back into a single historical record.",
+        parameters: [{ $ref: "#/components/parameters/id" }],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "Episode reconstruction",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: { data: { $ref: "#/components/schemas/EpisodeReconstruction" } },
+                },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": notFoundResponse["404"],
+        },
+      },
+    },
+    "/history/odds": {
+      get: {
+        tags: ["history"],
+        summary: "Per-selection price series (odds snapshots)",
+        parameters: [
+          { $ref: "#/components/parameters/limit" },
+          { name: "selectionId", in: "query", schema: { type: "string" } },
+          {
+            name: "eventId",
+            in: "query",
+            description: "Canonical event id (all selections' series)",
+            schema: { type: "string" },
+          },
+          { name: "from", in: "query", description: "ISO-8601 lower bound (inclusive)", schema: { type: "string", format: "date-time" } },
+          { name: "to", in: "query", description: "ISO-8601 upper bound (inclusive)", schema: { type: "string", format: "date-time" } },
+        ],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "Odds history points, ascending by observedAt",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: {
+                    data: { type: "array", items: { $ref: "#/components/schemas/OddsHistoryPoint" } },
+                  },
+                },
+              },
+            },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+    "/history/latency": {
+      get: {
+        tags: ["history"],
+        summary: "Poll-to-persist cycle latency per odds source",
+        parameters: [
+          { $ref: "#/components/parameters/limit" },
+          { name: "sourceKey", in: "query", schema: { type: "string" } },
+          { name: "after", in: "query", description: "Only cycles finished after this time (ISO-8601)", schema: { type: "string", format: "date-time" } },
+        ],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "Latency statistics per source",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: {
+                    data: { type: "array", items: { $ref: "#/components/schemas/SourceLatency" } },
+                  },
+                },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
+    "/history/analysis": {
+      get: {
+        tags: ["history"],
+        summary: "False-positive analysis over opportunity episodes",
+        parameters: [
+          { name: "after", in: "query", description: "Only episodes last seen after this time (ISO-8601)", schema: { type: "string", format: "date-time" } },
+        ],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "False-positive report",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: { data: { $ref: "#/components/schemas/FalsePositiveReport" } },
+                },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -614,6 +774,157 @@ export const openApiDocument: OpenApiDocument = {
           actor: { type: "string", nullable: true },
           detail: {},
           createdAt: { type: "string", format: "date-time" },
+        },
+      },
+      OpportunityEpisode: {
+        type: "object",
+        required: [
+          "id",
+          "eventCanonicalId",
+          "homeTeam",
+          "awayTeam",
+          "startTime",
+          "structureType",
+          "status",
+          "firstSeenAt",
+          "lastSeenAt",
+          "detectedCount",
+          "durationMs",
+        ],
+        properties: {
+          id: { type: "string" },
+          eventCanonicalId: { type: "string" },
+          competition: { type: "string" },
+          homeTeam: { type: "string" },
+          awayTeam: { type: "string" },
+          startTime: { type: "string", format: "date-time" },
+          structureType: { type: "string" },
+          marketStructure: { type: "string", nullable: true },
+          status: { $ref: "#/components/schemas/OpportunityStatus" },
+          firstSeenAt: { type: "string", format: "date-time" },
+          lastSeenAt: { type: "string", format: "date-time" },
+          detectedCount: { type: "integer" },
+          disappearedAt: { type: "string", format: "date-time", nullable: true },
+          durationMs: { type: "number" },
+        },
+      },
+      OddsHistoryPoint: {
+        type: "object",
+        required: ["selectionId", "eventCanonicalId", "bookmaker", "outcome", "odds", "observedAt"],
+        properties: {
+          selectionId: { type: "string" },
+          eventCanonicalId: { type: "string" },
+          family: { $ref: "#/components/schemas/MarketFamily" },
+          marketType: { type: "string" },
+          period: { $ref: "#/components/schemas/Period" },
+          participant: { type: "string", nullable: true },
+          line: { type: "string", nullable: true },
+          outcome: { $ref: "#/components/schemas/SelectionOutcome" },
+          bookmaker: { type: "string" },
+          odds: { type: "number" },
+          observedAt: { type: "string", format: "date-time" },
+          sourceUpdatedAt: { type: "string", format: "date-time", nullable: true },
+        },
+      },
+      EpisodeReconstruction: {
+        type: "object",
+        required: ["episode", "detections", "legs"],
+        properties: {
+          episode: { $ref: "#/components/schemas/OpportunityEpisode" },
+          detections: {
+            type: "array",
+            items: { $ref: "#/components/schemas/Opportunity" },
+          },
+          legs: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["selectionId", "bookmaker", "outcome", "market", "snapshotOdds", "movement"],
+              properties: {
+                selectionId: { type: "string" },
+                bookmaker: { type: "string" },
+                outcome: { $ref: "#/components/schemas/SelectionOutcome" },
+                market: {
+                  type: "object",
+                  required: ["family", "marketType", "period"],
+                  properties: {
+                    family: { $ref: "#/components/schemas/MarketFamily" },
+                    marketType: { type: "string" },
+                    period: { $ref: "#/components/schemas/Period" },
+                    participant: { type: "string", nullable: true },
+                    line: { type: "string", nullable: true },
+                  },
+                },
+                snapshotOdds: { type: "number" },
+                history: { type: "array", items: { $ref: "#/components/schemas/OddsHistoryPoint" } },
+                movement: {
+                  type: "object",
+                  required: ["first", "last", "min", "max", "delta", "pctChange"],
+                  properties: {
+                    first: { type: "number" },
+                    last: { type: "number" },
+                    min: { type: "number" },
+                    max: { type: "number" },
+                    delta: { type: "number" },
+                    pctChange: { type: "number" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      SourceLatency: {
+        type: "object",
+        required: ["sourceKey", "runs", "avgMs", "minMs", "maxMs"],
+        properties: {
+          sourceKey: { type: "string" },
+          runs: { type: "integer" },
+          avgMs: { type: "number" },
+          minMs: { type: "number" },
+          maxMs: { type: "number" },
+          lastRunAt: { type: "string", format: "date-time", nullable: true },
+          lastLatencyMs: { type: "number", nullable: true },
+        },
+      },
+      FalsePositiveReport: {
+        type: "object",
+        required: [
+          "episodes",
+          "active",
+          "concluded",
+          "verified",
+          "falsePositives",
+          "falsePositiveRate",
+          "byStatus",
+        ],
+        properties: {
+          episodes: { type: "integer" },
+          active: { type: "integer" },
+          concluded: { type: "integer" },
+          verified: { type: "integer" },
+          falsePositives: { type: "integer" },
+          falsePositiveRate: { type: "number" },
+          byStatus: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["status", "count", "avgDurationMs"],
+              properties: {
+                status: { $ref: "#/components/schemas/OpportunityStatus" },
+                count: { type: "integer" },
+                avgDurationMs: { type: "number" },
+              },
+            },
+          },
+          topRejectionReasons: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["reason", "count"],
+              properties: { reason: { type: "string" }, count: { type: "integer" } },
+            },
+          },
         },
       },
     },

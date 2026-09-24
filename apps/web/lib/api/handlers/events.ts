@@ -6,7 +6,7 @@
  * trace cross-source reconciliation (spec §4.1, §6).
  */
 
-import { requireAuth } from "../auth";
+import { guardRequest } from "../../security/guard";
 import { jsonError, jsonOk } from "../http";
 import {
   eventListQuerySchema,
@@ -18,8 +18,16 @@ import {
 } from "../schema";
 import { pagination, type HandlerDeps } from "./common";
 
+async function authorize(
+  request: Request,
+  deps: HandlerDeps,
+  required: "reader" | "admin" = "reader",
+) {
+  return guardRequest(request, deps, required);
+}
+
 export async function listEvents(request: Request, deps: HandlerDeps): Promise<Response> {
-  const auth = requireAuth(request, deps.env);
+  const auth = await authorize(request, deps);
   if (auth instanceof Response) return auth;
 
   const parsed = parseQuery(request, eventListQuerySchema);
@@ -39,7 +47,7 @@ export async function getEvent(
   deps: HandlerDeps,
   idParam: string,
 ): Promise<Response> {
-  const auth = requireAuth(request, deps.env);
+  const auth = await authorize(request, deps);
   if (auth instanceof Response) return auth;
 
   if (!idSchema.safeParse(idParam).success) {

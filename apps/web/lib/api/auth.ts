@@ -3,8 +3,10 @@
  *
  * The reader key (`x-api-key: <API_KEY>`) grants read access to the public
  * endpoints; the admin key (`x-api-key: <ADMIN_API_KEY>`) also unlocks the
- * /admin/* endpoints. Phase 16 replaces this with full auth/authorization, but
- * the envelope (401 / 403 + typed error codes) stays stable.
+ * /admin/* endpoints. `authenticate` is the pure role resolver; handlers run it
+ * through the Phase 16 guard (lib/security/guard.ts) which layers method/body
+ * checks, per-IP rate limiting and security auditing on top. The 401/403
+ * envelope and typed error codes stay stable.
  */
 
 import { timingSafeEqual } from "node:crypto";

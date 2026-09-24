@@ -5,11 +5,11 @@
  * Responsibilities: provider polling, rate limiting, retries/backoff, raw payload
  * capture, normalization job triggers, detection job triggers, heartbeat.
  *
- * Status: polling primitive (Phase 3). The operator loop (cron, rate limits,
- * retries, persistence of raw payloads to PostgreSQL via @22void/db, heartbeat)
- * is scheduled in Phase 14. `runCollectOnce` is the unit the scheduler will
- * invoke: one provider poll, one canonical-record conversion, one (optional)
- * raw payload store callback.
+ * Phase 14 ships the operator loop on top of the Phase 3 polling primitive
+ * (`runCollectOnce`): `createScanWorker`/`runScanCycle` (runtime), the token
+ * bucket rate limiter, retry/backoff, the normalization job (`normalizeRun`)
+ * and the detection job (`runDetection`). Raw payloads feed @22void/db through
+ * the store port; a memory store stands in for tests and sandbox runs.
  */
 
 import {
@@ -21,15 +21,19 @@ import {
   summarizeCanonicalRecords,
 } from "@22void/provider-contracts";
 
+export { workerId } from "./identity.js";
+export * from "./retry.js";
+export * from "./rate-limit.js";
+export * from "./normalize.js";
+export * from "./detect.js";
+export * from "./history.js";
+export * from "./runtime.js";
+export * from "./store.js";
+
 export interface WorkerHeartbeat {
   workerId: string;
   lastRunAt?: string;
   scansInFlight: number;
-}
-
-/** Returns the default worker id for this process. */
-export function workerId(): string {
-  return `odds-collector-${process.pid}`;
 }
 
 export interface CollectDeps {

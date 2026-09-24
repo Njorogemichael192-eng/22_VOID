@@ -8,7 +8,7 @@
  * - scanner: aggregated scanner-run health from ScannerHealth heartbeats.
  */
 
-import { requireAuth } from "../auth";
+import { guardRequest } from "../../security/guard";
 import { jsonOk } from "../http";
 import type { HandlerDeps } from "./common";
 
@@ -25,7 +25,7 @@ export async function health(): Promise<Response> {
 }
 
 export async function listProviders(request: Request, deps: HandlerDeps): Promise<Response> {
-  const auth = requireAuth(request, deps.env);
+  const auth = guardRequest(request, deps);
   if (auth instanceof Response) return auth;
 
   const providers = await deps.repo.listProviders();
@@ -33,7 +33,7 @@ export async function listProviders(request: Request, deps: HandlerDeps): Promis
 }
 
 export async function scannerStatus(request: Request, deps: HandlerDeps): Promise<Response> {
-  const auth = requireAuth(request, deps.env);
+  const auth = guardRequest(request, deps);
   if (auth instanceof Response) return auth;
 
   const runs = await deps.repo.listScannerRuns(SCANNER_RUNS);

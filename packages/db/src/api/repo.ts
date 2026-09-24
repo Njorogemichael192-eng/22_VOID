@@ -21,6 +21,13 @@ import type {
   SourceEventId,
 } from "../generated/client/client";
 import { getPrismaClient } from "../client";
+import {
+  falsePositiveAnalysis,
+  getEpisodeReconstruction,
+  listOpportunityEpisodes,
+  loadOddsHistory,
+  sourceLatencyStats,
+} from "../history";
 import type { Cursor } from "./cursor";
 import type {
   AdminSourceView,
@@ -38,6 +45,13 @@ import type {
   Page,
   ProviderView,
   ScannerRunView,
+} from "./types";
+import type {
+  EpisodeHistoryFilter,
+  FalsePositiveFilter,
+  HistoryRepo,
+  OddsHistoryFilterView,
+  SourceLatencyFilter,
 } from "./types";
 
 type EventWithSources = Event & {
@@ -480,6 +494,53 @@ export function createApiRepo(client: PrismaClient = getPrismaClient()): ApiRepo
         })),
         nextCursor: page.nextCursor,
       };
+    },
+  };
+}
+
+/**
+ * History read model (Phase 15): a narrow, read-only repository over the
+ * historical reconstruction layer in ./history.ts. The web handlers depend on
+ * this interface only, matching the ApiRepo contract pattern.
+ */
+export function createHistoryRepo(client: PrismaClient = getPrismaClient()): HistoryRepo {
+  return {
+    async listEpisodes(filter: EpisodeHistoryFilter) {
+      return listOpportunityEpisodes(client, {
+        ...(filter.eventCanonicalId !== undefined
+          ? { eventCanonicalId: filter.eventCanonicalId }
+          : {}),
+        ...(filter.status !== undefined
+          ? { status: filter.status as Opportunity["status"] }
+          : {}),
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      });
+    },
+    async getEpisodeReconstruction(episodeId: string) {
+      return getEpisodeReconstruction(client, episodeId);
+    },
+    async listOddsHistory(filter: OddsHistoryFilterView) {
+      return loadOddsHistory(client, {
+        ...(filter.selectionId !== undefined ? { selectionId: filter.selectionId } : {}),
+        ...(filter.eventCanonicalId !== undefined
+          ? { eventCanonicalId: filter.eventCanonicalId }
+          : {}),
+        ...(filter.from !== undefined ? { from: filter.from } : {}),
+        ...(filter.to !== undefined ? { to: filter.to } : {}),
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      });
+    },
+    async sourceLatency(filter: SourceLatencyFilter) {
+      return sourceLatencyStats(client, {
+        ...(filter.sourceKey !== undefined ? { sourceKey: filter.sourceKey } : {}),
+        ...(filter.after !== undefined ? { after: filter.after } : {}),
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      });
+    },
+    async falsePositiveAnalysis(filter: FalsePositiveFilter) {
+      return falsePositiveAnalysis(client, {
+        ...(filter.after !== undefined ? { after: filter.after } : {}),
+      });
     },
   };
 }

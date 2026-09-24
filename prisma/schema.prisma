@@ -147,24 +147,27 @@ model Event {
   sourceEventIds SourceEventId[]
   markets        Market[]
   opportunities  Opportunity[]
+  episodes       OpportunityEpisode[]
 
   @@index([startTime])
   @@map("events")
 }
 
 model SourceEventId {
-  id            String     @id @default(cuid())
-  eventId       String
-  event         Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  oddsSourceId  String
-  oddsSource    OddsSource @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
-  sourceEventId String
-  startTime     DateTime?
-  homeTeam      String?
-  awayTeam      String?
-  competition   String?
-  rawJson       Json?
-  createdAt     DateTime   @default(now())
+  id              String     @id @default(cuid())
+  eventId         String
+  event           Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  oddsSourceId    String
+  oddsSource      OddsSource @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  sourceEventId   String
+  /** Event-normalization confidence of this provider binding (Phase 4/14). */
+  eventConfidence Float?
+  startTime       DateTime?
+  homeTeam        String?
+  awayTeam        String?
+  competition     String?
+  rawJson         Json?
+  createdAt       DateTime   @default(now())
 
   @@unique([oddsSourceId, sourceEventId])
   @@index([eventId])
@@ -356,6 +359,8 @@ model Opportunity {
   id                String                @id @default(cuid())
   eventId           String
   event             Event                 @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  episodeId         String?
+  episode           OpportunityEpisode?   @relation(fields: [episodeId], references: [id], onDelete: SetNull)
   status            OpportunityStatus     @default(DETECTED)
   rejectionReason   RejectionReasonType?
   marketStructure   String?
@@ -378,7 +383,35 @@ model Opportunity {
   auditLogs AuditLog[]
 
   @@index([status, detectedAt])
+  @@index([episodeId])
   @@map("opportunities")
+}
+
+// ---------------------------------------------------------------------------
+// Opportunity episodes (Phase 15 — historical reconstruction)
+// ---------------------------------------------------------------------------
+
+model OpportunityEpisode {
+  id              String            @id
+  eventId         String
+  event           Event             @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  structureType   String
+  legKey          String
+  marketStructure String?
+  status          OpportunityStatus @default(DETECTED)
+  firstSeenAt     DateTime
+  lastSeenAt      DateTime
+  detectedCount   Int               @default(1)
+  disappearedAt   DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  opportunities Opportunity[]
+
+  @@unique([eventId, structureType, legKey])
+  @@index([lastSeenAt])
+  @@index([disappearedAt])
+  @@map("opportunity_episodes")
 }
 
 model OpportunityLeg {

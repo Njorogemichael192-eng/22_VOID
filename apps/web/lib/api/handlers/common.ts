@@ -5,12 +5,15 @@
 
 import { encodeCursor, type ApiRepo, type Cursor } from "@22void/db";
 import type { ApiAuthEnv } from "../auth";
+import type { SecurityDeps } from "../../security/guard";
 
 export interface HandlerDeps {
   repo: ApiRepo;
   env: ApiAuthEnv;
   /** Injectable clock for deterministic staleness tests. */
   now?: () => number;
+  /** Phase 16 request-guard options (rate limit / audit). */
+  security?: SecurityDeps;
 }
 
 export interface Pagination {

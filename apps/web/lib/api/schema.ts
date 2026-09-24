@@ -11,12 +11,16 @@
 import { z } from "zod";
 import {
   decodeCursor,
+  type AuditLogFilter,
   type Cursor,
+  type EpisodeHistoryFilter,
   type EventFilter,
+  type FalsePositiveFilter,
   type MarketFilter,
   type OddsFilter,
+  type OddsHistoryFilterView,
   type OpportunityFilter,
-  type AuditLogFilter,
+  type SourceLatencyFilter,
 } from "@22void/db";
 import {
   EVENT_STATUS_VALUES,
@@ -82,6 +86,43 @@ export const auditLogListQuerySchema = z.object({
   entityType: z.string().optional(),
 });
 export type AuditLogListQuery = z.infer<typeof auditLogListQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// History query schemas (Phase 15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Episode history and odds-history queries. `eventId` on these endpoints is the
+ * canonical event id (EventView.canonicalEventId) — the identity episodes and
+ * the historical layer expose.
+ */
+export const episodeHistoryQuerySchema = z.object({
+  limit: limitSchema.optional(),
+  eventId: idSchema.optional(),
+  status: z.enum(OPPORTUNITY_STATUS_VALUES).optional(),
+});
+export type EpisodeHistoryQuery = z.infer<typeof episodeHistoryQuerySchema>;
+
+export const oddsHistoryQuerySchema = z.object({
+  limit: limitSchema.optional(),
+  selectionId: idSchema.optional(),
+  eventId: idSchema.optional(),
+  from: isoDateTimeSchema.optional(),
+  to: isoDateTimeSchema.optional(),
+});
+export type OddsHistoryQuery = z.infer<typeof oddsHistoryQuerySchema>;
+
+export const sourceLatencyQuerySchema = z.object({
+  sourceKey: z.string().optional(),
+  after: isoDateTimeSchema.optional(),
+  limit: limitSchema.optional(),
+});
+export type SourceLatencyQuery = z.infer<typeof sourceLatencyQuerySchema>;
+
+export const falsePositiveQuerySchema = z.object({
+  after: isoDateTimeSchema.optional(),
+});
+export type FalsePositiveQuery = z.infer<typeof falsePositiveQuerySchema>;
 
 // ---------------------------------------------------------------------------
 // Parsing helpers
@@ -179,4 +220,34 @@ export function toAuditLogFilter(query: AuditLogListQuery): AuditLogFilter {
     cursor: null,
     limit: query.limit ?? DEFAULT_LIST_LIMIT,
   };
+}
+
+export function toEpisodeHistoryFilter(query: EpisodeHistoryQuery): EpisodeHistoryFilter {
+  return {
+    eventCanonicalId: query.eventId,
+    status: query.status,
+    limit: query.limit ?? DEFAULT_LIST_LIMIT,
+  };
+}
+
+export function toOddsHistoryFilter(query: OddsHistoryQuery): OddsHistoryFilterView {
+  return {
+    selectionId: query.selectionId,
+    eventCanonicalId: query.eventId,
+    from: query.from,
+    to: query.to,
+    limit: query.limit ?? DEFAULT_LIST_LIMIT,
+  };
+}
+
+export function toSourceLatencyFilter(query: SourceLatencyQuery): SourceLatencyFilter {
+  return {
+    sourceKey: query.sourceKey,
+    after: query.after,
+    limit: query.limit ?? DEFAULT_LIST_LIMIT,
+  };
+}
+
+export function toFalsePositiveFilter(query: FalsePositiveQuery): FalsePositiveFilter {
+  return { after: query.after };
 }

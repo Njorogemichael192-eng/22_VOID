@@ -83,3 +83,25 @@ jobs:
 
       - name: CRUD integration tests
         run: npm run db:test
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Secret scan (no committed credentials)
+        run: npm run security:scan
+
+      - name: Dependency audit (production tree)
+        run: npm run audit:prod
+
+      - name: Dependency audit (full tree)
+        run: npm run audit

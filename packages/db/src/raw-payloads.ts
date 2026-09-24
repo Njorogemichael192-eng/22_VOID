@@ -11,8 +11,11 @@ import type { Prisma } from "./generated/client/client";
  * uidempotent service startup — Phase 14 concern).
  */
 
+/** A connected Prisma client or the callback client of an open transaction. */
+export type DbLike = PrismaClient | Prisma.TransactionClient;
+
 export interface StoreRawPayloadInput {
-  db: PrismaClient;
+  db: PrismaClient | Prisma.TransactionClient;
   oddsSourceId: string;
   requestId?: string;
   endpoint?: string;
@@ -43,7 +46,7 @@ export interface OddsSourceLink {
 
 /** Find or create an odds source by its unique key (idempotent). */
 export async function ensureOddsSource(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   key: string,
   displayName?: string
 ): Promise<OddsSourceLink> {

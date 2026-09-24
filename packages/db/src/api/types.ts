@@ -8,6 +8,13 @@
  */
 
 import type { Cursor } from "./cursor.js";
+import type {
+  EpisodeReconstruction,
+  FalsePositiveReport,
+  OddsHistoryPoint,
+  OpportunityEpisodeSummary,
+  SourceLatencyStat,
+} from "../history.js";
 
 /** One page of list results; `nextCursor` is null on the last page. */
 export interface Page<T> {
@@ -203,4 +210,46 @@ export interface ApiRepo {
   listScannerRuns(limit: number): Promise<ScannerRunView[]>;
   listAdminSources(): Promise<AdminSourceView[]>;
   listAuditLogs(filter: AuditLogFilter): Promise<Page<AuditLogView>>;
+}
+
+// ---------------------------------------------------------------------------
+// History read model (Phase 15)
+// ---------------------------------------------------------------------------
+
+export interface EpisodeHistoryFilter {
+  eventCanonicalId?: string;
+  status?: string;
+  limit?: number;
+}
+
+export interface OddsHistoryFilterView {
+  selectionId?: string;
+  eventCanonicalId?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
+export interface SourceLatencyFilter {
+  sourceKey?: string;
+  after?: string;
+  limit?: number;
+}
+
+export interface FalsePositiveFilter {
+  after?: string;
+}
+
+/**
+ * Historical reconstruction read model (Phase 15): opportunity episodes,
+ * per-leg odds price series, source latency and false-positive analysis. The
+ * DTOs (EpisodeReconstruction, OddsHistoryPoint, ...) match the values in
+ * ./history.ts and are JSON-safe for the wire.
+ */
+export interface HistoryRepo {
+  listEpisodes(filter: EpisodeHistoryFilter): Promise<OpportunityEpisodeSummary[]>;
+  getEpisodeReconstruction(episodeId: string): Promise<EpisodeReconstruction | null>;
+  listOddsHistory(filter: OddsHistoryFilterView): Promise<OddsHistoryPoint[]>;
+  sourceLatency(filter: SourceLatencyFilter): Promise<SourceLatencyStat[]>;
+  falsePositiveAnalysis(filter: FalsePositiveFilter): Promise<FalsePositiveReport>;
 }

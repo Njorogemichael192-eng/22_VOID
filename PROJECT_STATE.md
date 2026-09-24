@@ -1,6 +1,6 @@
 # 22_VOID — PROJECT STATE / MASTER TODO
 
-Version: 1.13
+Version: 1.16
 
 ## STATUS
 
@@ -23,13 +23,13 @@ After every task:
 
 ## CURRENT PHASE
 
-Phase 13 — Dashboard (complete)
+Phase 16 — Security (complete)
 
 ## NEXT ACTION
 
-Phase 14 — Workers: scheduled polling, rate limiter, retry/backoff, raw payload
-capture, normalize job, detection job, persistence job, heartbeat, failure
-recovery. Acceptance: transient provider failures recover.
+Phase 17 — Testing: unit, settlement regression, outcome-state regression,
+false-arb regression, optimizer regression, provider fixtures, integration,
+e2e, load/candidate-generation test. Acceptance: CI green.
 
 ---
 
@@ -39,7 +39,7 @@ recovery. Acceptance: transient provider failures recover.
 - [x] Cloud-hosted architecture
 - [x] Football-first scope
 - [x] Confirm initial data provider — The Odds API chosen (see docs/PROVIDER_EVALUATION.md); ParlayAPI retained as Phase 19 provider B skeleton
-- [~] Confirm production terms/use rights — Odds-API TOS reviewed (storage/dashboards/derived analytics OK, no feed resale); commercial tiers to be purchased at deploy; Kenya compliance is operator-level
+- [x] Confirm production terms/use rights — Odds-API TOS reviewed (storage/dashboards/derived analytics OK, no feed resale); re-verified in Phase 16 + ParlayAPI key rotation incident documented (see docs/PROVIDER_EVALUATION.md); commercial tiers to be purchased at deploy; Kenya compliance is operator-level
 - [ ] Confirm production domain
 
 ## PHASE 0 — FOUNDATION
@@ -440,42 +440,96 @@ repo in CI (no DB needed).
 
 ## PHASE 14 — WORKERS
 
-- [ ] Scheduled polling
-- [ ] Rate limiter
-- [ ] Retry/backoff
-- [ ] Raw payload capture
-- [ ] Normalize job
-- [ ] Detection job
-- [ ] Persistence job
-- [ ] Heartbeat
-- [ ] Failure recovery
+- [x] Scheduled polling — `createScanWorker`/`runScanCycle` (`workers/odds-collector/src/runtime.ts`): fixed-interval operator loop with non-overlapping cycles, injectable scheduler for tests, `nativeScheduler()` (unref'd `setInterval`) for prod; `src/main.ts` entry (`npm run worker:collect` → `tsx src/main.ts`), env-driven provider (`WORKER_PROVIDER=mock|odds-api`) and store (`DATABASE_URL` set → Postgres store, else in-memory)
+- [x] Rate limiter — `TokenBucketRateLimiter` (`src/rate-limit.ts`): token bucket, injectable clock/delay, `queuedMs()`/`acquire()`; wired into the poll step of every cycle
+- [x] Retry/backoff — `src/retry.ts`: `isRetryableTransient` (429/5xx/no-status transport, AbortError/TimeoutError, transient socket codes; permanent 4xx re-raise immediately), `retryDelayMs` (exponential base² with ±50% jitter, capped `maxDelayMs`), `withRetry`, `defaultRetryPolicy` (4 attempts / 250ms → 2s)
+- [x] Raw payload capture — every poll's verbatim `RawProviderPayload` flows through the store's `storeRaw` before interpretation (§65 `raw_payloads` table); memory store keeps them for sandbox/tests
+- [x] Normalize job — `src/normalize.ts`: `normalizeRun` feeds canonical records through `EventNormalizer` seeded from the store (`loadEventSeeds`), persists merged-event confidence into `source_event_ids.eventConfidence` (new column + hand-written migration), and maps markets/selections to the DB identity model using the provider's composite market identity `${providerEventId}:${sourceMarketId}` (the DB keys markets per `(oddsSourceId, sourceMarketId)`, and a provider may reuse a market id across events). Unrepresentable/exact-score records are counted `invalid`, never guessed
+- [x] Detection job — `src/detect.ts`: adapts the freshly persisted `DbPricedSelection`s, runs the Phase 10 `scanCandidates` + Phase 11 `validateCandidate` pipeline, and persists every ARB scan's outcome (VERIFIED/FRESH/THEORETICAL/STALE/REJECTED) with its audit trail via `persistOpportunity`. The §39 final recheck is served by the cycle itself — the current cycle's prices are the recheck, so scans are self-consistent
+- [x] Persistence job — `@22void/db` `persistCanonicalRun` (events → source bindings → settlement rules → markets → selections, idempotent upserts) behind the `WorkerStore` port (`src/store.ts`), with a Prisma-backed adapter and an in-memory adapter; `ensureOddsSource`/`storeRawPayload` widened to `PrismaClient | Prisma.TransactionClient` (`DbLike`)
+- [x] Heartbeat — `recordHeartbeat` per cycle (started probe → finished OK/DEGRADED/DOWN with runId/sourceKey/message); `scanner_health` via the db store, in-memory list otherwise
+- [x] Failure recovery — a total outage (poll retries exhausted) marks the source `DOWN` and heartbeats it; the very next successful cycle marks it `HEALTHY` and resumes persisting; transient failures retry within the cycle
 
-**Acceptance:** transient provider failures recover.
+**Acceptance: transient provider failures recover.** Proven by
+`src/runtime.test.ts` "recovers from a total provider outage without losing
+data": a provider that fails twice (maxAttempts=2) cycles `DOWN` (attempts 2,
+sourceStatus DOWN), then recovers and cycles `OK` (attempts 1, status HEALTHY),
+persisting events/markets/selections, capturing the raw payload, and running
+detection.
+
+Phase 14 gate results (evidence):
+
+- `workers/odds-collector` — 26 tests / 6 suites pass: token-bucket semantics (burst, wait+refill), retry classification/backoff/exhaustion/`onRetry`, normalize (created → merged, composite market ids, confidence persisted), detect (built two-way 2.2/2.1 over/under arb persists as a `VERIFIED_ARB` opportunity with legs/returns/audit), runScanCycle recovery + transient-retry, and worker scheduler (manual schedule ticks, stop cancels, stop awaits in-flight cycle)
+- `packages/db` — `store.ts` write-side implemented and unit/integration covered (`integration/store.test.ts`, skip-if-no-DB; 8 passed / 23 skipped without a database); `source_event_ids.eventConfidence Float?` added; migration `20260923120000_source_event_confidence` written by hand (diffing from migrations requires `shadowDatabaseUrl`, `--to-schema-datamodel` is gone in Prisma 7), apply via `npm run db:deploy`
+- Root scripts: `worker:collect` added; `.env.example` documents `WORKER_PROVIDER`/`SCANNER_POLL_INTERVAL_MS`/`RATE_LIMIT_CAPACITY`/`RATE_LIMIT_REFILL_PER_SECOND`
+- Gate green: `npm run lint` (0), `npm run typecheck` (all workspaces), `npm test` (all workspaces; db integration suites skip cleanly without `DATABASE_URL`), `npm run build` (0), `npm run state:check` (PASS)
+
+Notes:
+
+- Acceptable build-module flow: `@22void/db` must not import provider-contracts/arbitrage, so it exposes structural DTOs (`PersistCanonicalRunInput`, `PersistOpportunityInput`, `DbPricedSelection`, …) and the worker (`@22void/odds-collector`, allowed to import every engine package) adapts between them. Raw payload types stay provider-contracts-owned; the db store's `storeRaw` casts to `Prisma.InputJsonValue`.
+- `exactOptionalPropertyTypes` shaped every new module: optional inputs are assembled with conditional spreads (`...(x !== undefined ? { x } : {})`), never `x: undefined`.
+- The Odds-API adapter needs a live key to poll on-network; the mock provider delivers deterministic fixture polls so the entire cycle (collect → normalize → persist → detect → heartbeat → recovery) is verified without a network or a database.
 
 ## PHASE 15 — HISTORY
 
-- [ ] Odds snapshots
-- [ ] Opportunity snapshots
-- [ ] Disappearance time
-- [ ] Price movement
-- [ ] Source latency
-- [ ] Arb duration
-- [ ] False-positive analysis
+- [x] Odds snapshots — every new price is recorded in `odds_observations` (the first quoted price now writes a row, not just changes), and `loadOddsHistory` returns the per-selection price series
+- [x] Opportunity snapshots — new `opportunity_episodes` table groups repeated detections of the same legs via a deterministic key, with per-cycle `opportunities` linked by `episodeId` (Phase 15 migration `20260923130000_opportunity_episodes`)
+- [x] Disappearance time — `sweepOpportunityEpisodes` (worker reconcile step) stamps `disappearedAt` on episodes absent from a healthy cycle and restores re-detected ones
+- [x] Price movement — `LegMovement` (`first`/`last`/`min`/`max`/`delta`/`pctChange`) computed per leg; `getEpisodeReconstruction` returns episode + detection snapshots + per-leg odds series and movement
+- [x] Source latency — `sourceLatencyStats` aggregates poll-to-persist cycle latency from `scanner_health` per odds source (runs, avg/min/max, last run/latency)
+- [x] Arb duration — `OpportunityEpisodeSummary.durationMs` = `lastSeenAt − firstSeenAt` (wall-clock span the legs stayed detectable)
+- [x] False-positive analysis — `falsePositiveAnalysis` classifies concluded episodes by latest status (STALE/REJECTED/INVALIDATED = false positive, VERIFIED_ARB = verified), rate, per-status duration and top rejection reasons
 
-**Acceptance:** historical opportunities can be reconstructed.
+**Acceptance: historical opportunities can be reconstructed.** Proven by
+`@22void/db` integration tests (`integration/history.test.ts`) — an episode is
+tracked across repeated detections of the same legs (`detectedCount`, stable
+`durationMs`, null `disappearedAt`), the full price series is recorded and
+reconstructed (2.1 → 2.2 with movement), originals are restorable after a sweep
+(disappeared → detected again), source latency aggregates, and the
+false-positive report summarizes concluded episodes. The API exposes it:
+`GET /api/v1/history/opportunities{,/:id}`, `/odds`, `/latency`, `/analysis`.
+
+Phase 15 gate results (evidence):
+
+- `packages/db` — `history.ts` (`listOpportunityEpisodes`, `getEpisodeReconstruction`, `loadOddsHistory`, `sweepOpportunityEpisodes`, `sourceLatencyStats`, `falsePositiveAnalysis`, `computeOpportunityKey`/`legKeyFromSelectionIds`), store changes (first-price observation, observations count = created-or-changed, `persistOpportunity` episode upsert in a `$transaction`), `HistoryRepo` + `createHistoryRepo`; unit tests for the episode key + integration suite (skip-if-no-DB; 11 passed / 28 skipped without a database); migration `20260923130000_opportunity_episodes` written by hand, applied via `npm run db:deploy` (Prisma 7 needs `shadowDatabaseUrl` to diff from migrations)
+- `workers/odds-collector` — `reconcileOpportunityEpisodes` (DISAPPEARED/RESTORED bookkeeping in the OK branch only), `WorkerStore.reconcileOpportunityEpisodes` behind both adapters, deterministic `opportunityKey` stamped on every detection; 31 tests / 7 suites pass
+- `apps/web` — history handlers + routes, zod query schemas, OpenAPI paths/schemas, fake-HistoryRepo handler tests (incl. auth 401, 400 without selectionId/eventId, 404/400 reconstruction paths); 83 tests / 7 suites pass
+- Gate green: `npm run lint` (0), `npm run typecheck` (all workspaces), `npm test` (all workspaces), `npm run build` (0), `npm run state:check` (PASS)
+
+Notes:
+
+- `@22void/db` re-exports the `HistoryRepo` filter types (`EpisodeHistoryFilter`, `OddsHistoryFilterView`, `SourceLatencyFilter`, `FalsePositiveFilter`) so the web layer's `schema.ts` converters stay typed.
+- Strictness shaping: optional Prisma args are built inline with conditional spreads because a pre-typed `Prisma.XFindManyArgs` object loses `include` inference; `exactOptionalPropertyTypes` forbids `x: undefined` everywhere.
+- History is read-only over the write model; the worker owns sweeps, the API own reads, and the dashboard can consume the reconstruction in a later phase.
 
 ## PHASE 16 — SECURITY
 
-- [ ] Secrets server-side
-- [ ] Auth/authorization
-- [ ] Rate limiting
-- [ ] Input validation
-- [ ] Security headers
-- [ ] Audit logs
-- [ ] Dependency audit
-- [ ] Provider terms review
+- [x] Secrets server-side — all credentials are server-only env (`API_KEY`, `ADMIN_API_KEY`, `ODDS_API_KEY`, `PARLAY_API_KEY`, `DATABASE_URL`) with no `NEXT_PUBLIC_*` variants anywhere in `apps/web`; static test (`apps/web/lib/security/security.test.ts` "secrets server-side only") scans the app/lib/components/proxy source for `process.env` reads and asserts no NEXT_PUBLIC secret or unauthorized env variable is read, and no env read lives in `components/**`. A real ParlayAPI key was found committed in `.env.example` during this phase and removed; `scripts/secret-scan.ts` (`npm run security:scan`) gates CI against committed credentials
+- [x] Auth/authorization — Phase 12 static API-key auth (reader + admin roles, constant-time compare) preserved; every handler now passes through `guardRequest(request, deps, requiredRole)` (`apps/web/lib/security/guard.ts`) which layers method check (405 + Allow), body rejection (GET reads only: 400 / 413 at 64 KiB), per-IP rate limiting (429 + Retry-After) and auth (401/403) with audit capture; admin endpoints require the admin role (403 for readers)
+- [x] Rate limiting — shared `ApiRateLimiter` (`apps/web/lib/security/rate-limit.ts`, per-key token bucket, injectable clock, prune/refill, `clientIp` with x-forwarded-for first hop → x-real-ip → unknown) injected per holder in `lib/api/runtime.ts`; capacity/refill configurable via `API_RATE_LIMIT_CAPACITY`/`API_RATE_LIMIT_REFILL_PER_SECOND` (documented in `.env.example`); the collector's provider-poll token bucket already existed (Phase 14)
+- [x] Input validation — Phase 12 zod v4 query parsing (enum filters against domain value sets, epoch-safe ISO bounds, `limit` 1–100) retained; request bodies are now rejected wholesale on the GET-only API (never parsed), and oversized bodies return 413 before any query work
+- [x] Security headers — `apps/web/proxy.ts` (Next 16 proxy) applies `baseSecurityHeaders` to every response (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, COOP, HSTS over TLS only) plus a route-appropriate CSP: `pageContentSecurityPolicy` for pages (`default-src 'self'`, script/style `'unsafe-inline'` per Next docs) and a sandboxed `apiContentSecurityPolicy` (`default-src 'none'; frame-ancestors 'none'; sandbox`) for `/api/*`
+- [x] Audit logs — `writeAuditLog` in `@22void/db` (re-exported, `entityType` defaults to `"security"`) backed by the existing `audit_logs` table; the guard audits METHOD_NOT_ALLOWED / PAYLOAD_TOO_LARGE / REQUEST_BODY_NOT_ALLOWED / RATE_LIMITED / AUTH_FAILED / AUTH_FORBIDDEN / ADMIN_ACCESS (actor = client IP) via `dbAudit()` (fail-soft) or `nullAudit`/`memoryAudit` for tests; surfaces through the existing `GET /api/v1/admin/audit-logs?entityType=security`; DB integration suite added (`packages/db/src/integration/audit.test.ts`, skip-if-no-DB)
+- [x] Dependency audit — root `package.json` `overrides` pin `deepmerge-ts ^8.0.2` and `mysql2 ^3.24.4` (closures of the `@prisma/client`/`prisma` toolchain advisories); `npm audit` and `npm audit --omit=dev --audit-level=high` report **0 vulnerabilities**; `npm run security:scan` + `npm run audit`/`audit:prod` wired into a new `security` CI job; `prisma generate`/`validate` still pass after the pin
+- [x] Provider terms review — re-verification recorded in `docs/PROVIDER_EVALUATION.md`: both TOS unchanged (no feed resale, storage/dashboards/derived analytics OK for Odds API; ParlayAPI free tier non-commercial); the Phase 3 ParlayAPI key leak requires user-side rotation at ParlayAPI; polling honors quota/rate limits, never bypasses bookmaker bot/access controls; raw payload retention per spec §65
 
-**Acceptance:** security checklist passes.
+**Acceptance: security checklist passes.**
+
+Phase 16 gate results (evidence):
+
+- `npm run lint` — 0 errors
+- `npm run typecheck` — all workspaces pass
+- `npm test` — all workspaces pass: web 100 tests / 8 suites (incl. `lib/security/security.test.ts`, 17 tests: rate-limiter burst/refill/buckets, `clientIp`, guard layering 405/400/413/429+Retry-After/401/403 + audit capture, header + CSP policy, secrets server-side scan), db 11 passed / 29 skipped without a database (the audit `writeAuditLog` integration suite skips like the others), collector 31, provider-contracts 43, settlement 57, normalization 59, arbitrage 70, outcome-engine 23, domain 63, shared 7
+- `npm run build` — clean across all workspaces
+- `npm run security:scan` — PASS (209 tracked files, no secrets)
+- `npm run audit` / `npm run audit:prod` — 0 vulnerabilities
+- `npm run state:check` — PASS
+
+Notes:
+
+- The leaked ParlayAPI key (`<REDACTED>`, committed during Phase 3 exploration) is removed from the working tree but remains in git history through `origin` — it must be rotated/revoked at the provider. The scan looks at `git ls-files` so freshly added secrets fail CI before they can be pushed.
+- `guardRequest` returns a `Response` on any failure (or a `{ ok: true, role }` marker on success); handlers use the shared `HandlerDeps`/`HistoryHandlerDeps.security` slot, so the limiter and audit store are injected once in `runtime.ts` instead of constructed per request.
+- Headers live in a pure module (`lib/security/headers.ts`) because `proxy.ts` runs on Next's edge runtime; CSP values are static strings.
 
 ## PHASE 17 — TESTING
 
@@ -546,6 +600,12 @@ Only after football is stable:
 Live data → correct event → correct market → correct settlement → complete outcome coverage → valid optimization → positive minimum guaranteed return → fresh prices → final verification.
 
 ## CHANGELOG
+
+- 2026-09-24 (Phase 16): Security. **Incident**: a real ParlayAPI key (`<REDACTED>`) was found committed in `.env.example` from Phase 3 exploration; removed from the working tree and replaced with a placeholder comment. It remains in git history through `origin` (commits `a92e064`/`7985e73`) — regenerate a new key in ParlayAPI. New `scripts/secret-scan.ts` (`npm run security:scan`) scans `git ls-files` for credential patterns (GitHub/Stripe/OpenAI/Slack/AWS/npm/SendGrid/Google/GitLab/Telegram/private keys) + non-placeholder env assignments; currently PASS on 209 files. **Dependency audit**: root `package.json` `overrides` pin `deepmerge-ts ^8.0.2` and `mysql2 ^3.24.4` (transitive closures of the `@prisma/client`/`prisma` CLI advisories); `npm audit` / `npm audit --omit=dev --audit-level=high` = 0 vulnerabilities; new scripts `audit`/`audit:prod`; a `security` CI job runs the scan + both audits. **Runtime hardening** (`apps/web`): `lib/security/headers.ts` + `proxy.ts` (Next 16 proxy) apply base security headers (nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy, COOP; HSTS only over TLS) and a route CSP (`pageContentSecurityPolicy` for pages, sandboxed `default-src 'none'` `apiContentSecurityPolicy` for `/api/*`). `lib/security/rate-limit.ts` — per-key token-bucket `ApiRateLimiter` + `clientIp`; injected once per runtime holder. `lib/security/guard.ts` — `guardRequest` layers method (405+Allow), body rejection (400, 413 at 64 KiB), rate limit (429+Retry-After) and auth (401/403, admin role for admin routes); every Phase 12/15 handler switched from `requireAuth` to `guardRequest`. `packages/db/src/audit.ts` — `writeAuditLog` (entityType default `"security"`) re-exported from `@22void/db`; guard audits METHOD_NOT_ALLOWED / PAYLOAD_TOO_LARGE / REQUEST_BODY_NOT_ALLOWED / RATE_LIMITED / AUTH_FAILED / AUTH_FORBIDDEN / ADMIN_ACCESS with the caller IP, surfaced by the existing `GET /api/v1/admin/audit-logs` filter. Web security tests: 17 (limiter, ip, guard layering + audit capture, header/CSP, secrets-server-side static scan — no `NEXT_PUBLIC_*` secrets, no env reads in `components/**`, allowlisted env reads only). DB integration suite for `writeAuditLog` added (skip-if-no-DB). `docs/PROVIDER_EVALUATION.md` re-verification section (terms unchanged, rotation recorded, no bot/access-control bypass, quota-respecting polling). CI: new `security` job. Gate green: lint, typecheck, build, 100 web tests + all workspace suites, `state:check`.
+
+- 2026-09-23 (Phase 15): History — odds/opportunity snapshots, disappearance, analysis. `@22void/db` gains the historical read/write model. Schema: new `opportunity_episodes` table (`eventId` FK `ON DELETE CASCADE`, `structureType`, `legKey`, `marketStructure`, `status`, `firstSeenAt`, `lastSeenAt`, `detectedCount`, `disappearedAt`, unique `(eventId, structureType, legKey)`, indexes on `lastSeenAt`/`disappearedAt`) and `opportunities.episodeId` (nullable FK `ON DELETE SET NULL`) — migration `20260923130000_opportunity_episodes`, hand-written (Prisma 7 `migrate diff --from-migrations` needs `shadowDatabaseUrl`; apply via `db:deploy`). Episodes are keyed deterministically by `computeOpportunityKey` = `episode:${eventCanonicalId}:${structureType}:${sorted unique selectionIds joined "+"}` so detection, store and history agree without extra ids. The first quoted price now writes an `odds_observations` row (previously only changes) and `selections.observations` counts created-or-changed, so no historical price is missing. `persistOpportunity` upserts the episode inside a `$transaction` (by id → else unique triple → else create) and connects the opportunity. New `history.ts`: `listOpportunityEpisodes`, `getEpisodeReconstruction` (episode + per-detection snapshots + per-unique-leg odds series with `LegMovement` first/last/min/max/delta/pctChange), `loadOddsHistory` (selection- or event-scoped, ISO bounds), `sweepOpportunityEpisodes` (absent healthy-cycle keys → `disappearedAt`; re-detected → restore), `sourceLatencyStats` (poll-to-persist from `scanner_health` per source: runs/avg/min/max/last) and `falsePositiveAnalysis` (concluded episodes by latest status — STALE/REJECTED/INVALIDATED = false positives, VERIFIED_ARB = verified — plus by-status duration and top rejection reasons). Read model: `HistoryRepo` + `createHistoryRepo`; filter types re-exported for the web layer. Worker: `detect.ts` stamps a deterministic `opportunityKey`, `WorkerStore.reconcileOpportunityEpisodes` lands on both adapters (DB → sweep; memory mirrors with a debug view), and `history.ts` `reconcileOpportunityEpisodes` runs only in the healthy OK branch after detection (DOWN/DEGRADED never fabricate disappearances); `runtime.ts` adds a `history` field to the heartbeat. Web API: `GET /api/v1/history/opportunities` (limit/eventId/status), `/history/opportunities/:episodeId` (reconstruction), `/history/odds` (`selectionId` **or** canonical `eventId` required + from/to), `/history/latency` (`sourceKey`/`after`/`limit`), `/history/analysis` (`after`), all behind `serverHistoryDeps()`, with zod query schemas, OpenAPI paths/components (`OpportunityEpisode`, `EpisodeReconstruction`, `OddsHistoryPoint`, `SourceLatency`, `FalsePositiveReport`) and fake-repo handler tests (auth 401, 400 without selectionId/eventId, 404/400 reconstruction). Acceptance: reconstruction proven by `integration/history.test.ts` (episode tracked across repeated detections with stable `durationMs`, price series 2.1 → 2.2 with movement, sweep + restorable originals, latency stats, false-positive report). Gate green: `npm run lint` (0), `npm run typecheck` (all workspaces), `npm test` (all workspaces), `npm run build` (0), `npm run state:check` (PASS).
+
+- 2026-09-23 (Phase 14): Workers (`workers/odds-collector` operator loop + write-side store). `@22void/db` gains the persistence job: `persistCanonicalRun` (idempotent run upserts — events → source bindings → settlement rules (version 1, idempotent) → markets → selections; unrepresentable exact-score outcomes counted `invalid`, never guessed), `loadPricedSelections` (fresh prices + event/settlement confidence attestation), `markSourceStatus`/`recordHeartbeat`, `persistOpportunity` (opportunity + legs + audit trail, deterministic id), and `source_event_ids.eventConfidence` (migration `20260923120000_source_event_confidence`, hand-written because `prisma migrate diff --from-migrations` needs `shadowDatabaseUrl` and Prisma 7 dropped `--to-schema-datamodel`; apply via `db:deploy`). `ensureOddsSource`/`storeRawPayload` now accept `PrismaClient | Prisma.TransactionClient` (callback-level `$transaction` is an `Omit<...>` type, so a `DbLike` union is exposed). Worker built out behind a `WorkerStore` port (`src/store.ts`, Prisma + in-memory adapters with raw-payload/heartbeat/opportunity debug views): `rate-limit.ts` (token bucket, injectable clock/delay), `retry.ts` (429/5xx/network transient classification, exponential ±50% jitter backoff to 2s, `withRetry`), `normalize.ts` (`normalizeRun` seeds `EventNormalizer` from the store, persists match confidence into `eventConfidence`, composites persisted market identity as `${providerEventId}:${sourceMarketId}` because the DB keys markets per `(oddsSourceId, sourceMarketId)` and a provider can reuse a market id across events), `detect.ts` (adapts `DbPricedSelection`, runs Phase 10 `scanCandidates` + Phase 11 `validateCandidate`, persists every ARB scan's outcome + audit via `persistOpportunity`; the §39 recheck is the cycle's own fresh prices, so scans are self-consistent), `runtime.ts` (`runScanCycle`: heartbeat → rate-limit → poll+retry → raw payload → normalize → persist → detect → source availability + heartbeat; DOWN on exhausted poll, HEALTHY on the next success — acceptance *transient provider failures recover*; `createScanWorker` non-overlapping interval scheduler, injectable schedule, stop waits for in-flight), `main.ts` env-driven entry (`WORKER_PROVIDER=mock|odds-api`, `SCANNER_POLL_INTERVAL_MS`, rate-limit env, `DATABASE_URL` → Postgres store else in-memory) + root `worker:collect`; `.env.example` documents the worker env; `docs/ARCHITECTURE.md` gains the Phase 14 scan-cycle section. 26 worker tests / 6 suites (rate limit, retry, normalize create-merge, detect VERIFIED_ARB from a built arb, recovery DOWN→HEALTHY with persisted data, scheduler + in-flight stop). Gate green: lint, typecheck, test (all workspaces), build, `state:check` (PASS).
 
 - 2026-09-22 (Phase 13): Dashboard (`apps/web`). Full 22_VOID shell — `SiteHeader`/`SiteFooter` with active-link nav and a data-source label — wrapped the root layout; the landing page now links into the data layer. New `lib/dashboard/` reads straight from the Phase 12 `ApiRepo` (never the HTTP layer), keeping pages testable without a DB: `format.ts` (odds/money/percent/ROI/age/date + market & selection labels, safe for client & server), `metrics.ts` (`legRows`, `compareBookmakerOdds` — matches each leg's market on family/period/participant/line, flags the best current price and rings the snapshot bookmaker, `summarizeScanner` with the 5-minute staleness rule), `explain.ts` (pure evidence sections — positive guaranteed return from the solved plan, market-structure copy per `StructureType`, settlement coverage, per-`RejectionReason` "why rejected" copy, freshness with recheck-window expiry — still following Rule 5/6: text is a function of the view), `demo-repo.ts` (deterministic in-memory `ApiRepo` seeded relative to `Date.now()`: 4 events, 6 markets with live quotes, 6 opportunities covering VERIFIED/FRESH/THEORETICAL/REJECTED/STALE, 4 providers incl. DEGRADED, scanner runs incl. an older DEGRADED one — pagination/filters implemented so the flow is honest), `server-repo.ts` (`DASHBOARD_SOURCE=demo` or no `DATABASE_URL` → demo repo, else Prisma repo) and `snapshot.ts`. Pages (all `force-dynamic`, none bundled with client JS): `/dashboard` overview (verified opportunities table + provider-health + scanner-heartbeat panels), `/opportunities` with a client-side lifecycle-status filter, `/opportunities/[id]` — the inspection flow (guarantee cards, leg matrix, stake calculator that re-plans proportionally from the optimizer split, bookmaker comparison, evidence cards, engine versions), `/events` + `/events/[id]` (market matrix per family), `/providers` (health cards + scanner run table). Client components: `OpportunityFilters` (search-param navigation) and `StakeCalculator` (pure scaling, server-compatible formatters). Acceptance proven: 38 new unit tests (72 in @22void/web; repo-wide 407) plus 7 new Playwright e2e specs that build the app, boot it against the demo seed and walk landing → overview → opportunity detail → rejected-why → event matrix → providers on bare Chrome (no DB). Gate green: lint, typecheck, build, 407 tests, e2e 8/8, `state:check`.
 
