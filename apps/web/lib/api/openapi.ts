@@ -91,6 +91,31 @@ export const openApiDocument: OpenApiDocument = {
         responses: { "200": { description: "Service is up" } },
       },
     },
+    "/ready": {
+      get: {
+        tags: ["system"],
+        summary: "Readiness probe (public)",
+        security: [],
+        responses: {
+          "200": {
+            description: "Service is ready",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Readiness" },
+              },
+            },
+          },
+          "503": {
+            description: "Service is not ready",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Readiness" },
+              },
+            },
+          },
+        },
+      },
+    },
     "/openapi": {
       get: {
         tags: ["system"],
@@ -559,6 +584,23 @@ export const openApiDocument: OpenApiDocument = {
       },
     },
     schemas: {
+      Readiness: {
+        type: "object",
+        required: ["status", "service", "checks", "time"],
+        properties: {
+          status: { type: "string", enum: ["ok", "not_ready"] },
+          service: { type: "string" },
+          checks: {
+            type: "object",
+            required: ["databaseUrl", "database"],
+            properties: {
+              databaseUrl: { type: "boolean" },
+              database: { type: "boolean" },
+            },
+          },
+          time: { type: "string", format: "date-time" },
+        },
+      },
       Error: {
         type: "object",
         required: ["error"],

@@ -1,0 +1,26 @@
+{
+  "name": "@22void/regression",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@22void/arbitrage": "0.0.0",
+    "@22void/db": "0.0.0",
+    "@22void/domain": "0.0.0",
+    "@22void/normalization": "0.0.0",
+    "@22void/odds-collector": "0.0.0",
+    "@22void/outcome-engine": "0.0.0",
+    "@22void/provider-contracts": "0.0.0",
+    "@22void/settlement": "0.0.0",
+    "@22void/shared": "0.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

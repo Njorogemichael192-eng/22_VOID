@@ -6,10 +6,11 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "workers/*"
+    "workers/*",
+    "tests/regression"
   ],
   "engines": {
-    "node": ">=20.9.0",
+    "node": "^22.13.0 || >=24.0.0",
     "npm": ">=10"
   },
   "scripts": {
@@ -21,14 +22,17 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "state:check": "tsx scripts/project-state-check.ts",
-    "test:fixtures": "echo \"Phase 17 scope: regression fixtures under tests/fixtures\"",
+    "test:fixtures": "npm run test --workspace @22void/regression",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:test": "npm test -w @22void/db",
     "worker:collect": "npm run start --workspace @22void/odds-collector",
+    "smoke:prod": "tsx scripts/smoke-prod.ts",
+    "compose:prod:config": "docker compose --env-file infra/.env.prod -f infra/compose.prod.yml config --quiet",
     "security:scan": "tsx scripts/secret-scan.ts",
+    "security:scan:test": "tsx scripts/secret-scan.ts --self-test",
     "audit": "npm audit --audit-level=high",
     "audit:prod": "npm audit --omit=dev --audit-level=high"
   },

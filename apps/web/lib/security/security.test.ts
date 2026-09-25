@@ -14,7 +14,7 @@ import {
   isApiPath,
   pageContentSecurityPolicy,
 } from "./headers";
-import { guardRequest } from "./guard";
+import { guardRequest, RATE_LIMITED_AUDIT_INTERVAL_MS, resetGuardAuditThrottle } from "./guard";
 import { memoryAudit, type SecurityAuditEntry } from "./audit";
 import { ApiRateLimiter, clientIp } from "./rate-limit";
 
@@ -148,6 +148,55 @@ describe("guardRequest", () => {
 
     // A different caller is unaffected.
     expect(guardRequest(get(url, READER_KEY, "8.8.8.8"), deps).ok).toBe(true);
+  });
+
+  it("throttles 429 audit rows so a flood cannot flood the audit table", async () => {
+    resetGuardAuditThrottle();
+    const log: SecurityAuditEntry[] = [];
+    const limiter = new ApiRateLimiter({ capacity: 1, refillPerSecond: 0.01 });
+    let at = 1_000_000;
+    const deps = {
+      env,
+      security: { rateLimiter: limiter, audit: memoryAudit(log), now: () => at },
+    };
+    const url = "http://localhost/api/v1/events";
+
+    expect(guardRequest(get(url, READER_KEY, "7.7.7.7"), deps).ok).toBe(true);
+    for (let i = 0; i < 500; i += 1) {
+      const blocked = guardRequest(get(url, READER_KEY, "7.7.7.7"), deps);
+      expect((blocked as Response).status).toBe(429);
+      at += 5;
+    }
+    await settle();
+    expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(1);
+
+    at += RATE_LIMITED_AUDIT_INTERVAL_MS + 1;
+    expect((guardRequest(get(url, READER_KEY, "7.7.7.7"), deps) as Response).status).toBe(429);
+    await settle();
+    expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(2);
+    resetGuardAuditThrottle();
+  });
+
+  it("rate-limits a rejected-method flood before it can write audit rows", async () => {
+    resetGuardAuditThrottle();
+    const log: SecurityAuditEntry[] = [];
+    const limiter = new ApiRateLimiter({ capacity: 2, refillPerSecond: 0.5 });
+    const deps = { env, security: { rateLimiter: limiter, audit: memoryAudit(log) } };
+    const url = "http://localhost/api/v1/events";
+    const post = (ip: string) =>
+      new Request(url, { method: "POST", headers: { "x-forwarded-for": ip } });
+
+    expect((guardRequest(post("6.6.6.6"), deps) as Response).status).toBe(405);
+    expect((guardRequest(post("6.6.6.6"), deps) as Response).status).toBe(405);
+
+    for (let i = 0; i < 50; i += 1) {
+      expect((guardRequest(post("6.6.6.6"), deps) as Response).status).toBe(429);
+    }
+
+    await settle();
+    expect(log.filter((e) => e.action === "METHOD_NOT_ALLOWED")).toHaveLength(2);
+    expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(1);
+    resetGuardAuditThrottle();
   });
 
   it("answers 401 without a valid key and audits the failure", async () => {

@@ -22,6 +22,8 @@ import {
 } from "@22void/provider-contracts";
 
 export { workerId } from "./identity.js";
+export * from "./config.js";
+export * from "./health.js";
 export * from "./retry.js";
 export * from "./rate-limit.js";
 export * from "./normalize.js";

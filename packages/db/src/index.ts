@@ -100,17 +100,60 @@ export interface DbHealth {
   latencyMs?: number;
 }
 
-/** Runs `SELECT 1` against the given connection string. */
-export async function checkDbHealth(connectionString: string): Promise<DbHealth> {
-  const startedAt = performance.now();
-  const client = createPrismaClient(connectionString);
+export interface DbHealthOptions {
+  /**
+   * Wall-clock budget for the whole probe, in ms (default 5000). A probe that
+   * exceeds it reports `reachable: false` instead of pinning a socket forever,
+   * which matters because readiness probes run unauthenticated.
+   */
+  timeoutMs?: number;
+  /** Clock override for deterministic tests. */
+  now?: () => number;
+}
+
+/**
+ * Force a libpq connect timeout onto a postgres URL when the caller has not set
+ * one. Without it, a blackholed address leaves the TCP connect pending for the
+ * OS default (minutes), so the probe timeout alone would not free the socket.
+ */
+export function withConnectTimeout(connectionString: string, timeoutSeconds: number): string {
   try {
-    await client.$queryRaw`SELECT 1`;
-    return { reachable: true, latencyMs: performance.now() - startedAt };
+    const url = new URL(connectionString);
+    if (!url.searchParams.has("connect_timeout")) {
+      url.searchParams.set("connect_timeout", String(timeoutSeconds));
+    }
+    return url.toString();
+  } catch {
+    return connectionString;
+  }
+}
+
+/** Runs `SELECT 1` against the given connection string, bounded by `timeoutMs`. */
+export async function checkDbHealth(
+  connectionString: string,
+  options: DbHealthOptions = {},
+): Promise<DbHealth> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+  const now = options.now ?? (() => performance.now());
+  const startedAt = now();
+  const client = createPrismaClient(withConnectTimeout(connectionString, Math.ceil(timeoutMs / 1000)));
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`database health probe timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+
+  try {
+    await Promise.race([client.$queryRaw`SELECT 1`, expiry]);
+    return { reachable: true, latencyMs: now() - startedAt };
   } catch (error) {
     console.warn("[@22void/db] health probe failed", error);
     return { reachable: false };
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
     await client.$disconnect().catch(() => undefined);
   }
 }

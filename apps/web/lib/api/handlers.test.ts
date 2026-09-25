@@ -29,7 +29,8 @@ import { listAdminSources, listAuditLogs } from "./handlers/admin.js";
 import { listEvents, getEvent } from "./handlers/events.js";
 import { listMarkets, getMarket, listOdds } from "./handlers/markets.js";
 import { listOpportunities, getOpportunity } from "./handlers/opportunities.js";
-import { listProviders, scannerStatus, health } from "./handlers/system.js";
+import { listProviders, scannerStatus, health, ready } from "./handlers/system.js";
+import { serverHandlerDeps, serverHistoryDeps } from "./runtime.js";
 import {
   falsePositiveAnalysis,
   getEpisodeReconstruction,
@@ -599,6 +600,55 @@ describe("system endpoints", () => {
     expect(payload.service).toBe("@22void/web");
   });
 
+  it("serves readiness when the database probe succeeds", async () => {
+    const calls: string[] = [];
+    const response = await ready({
+      databaseUrl: "postgresql://db.internal/void",
+      checkDbHealth: async (connectionString) => {
+        calls.push(connectionString);
+        return { reachable: true };
+      },
+      now: () => Date.parse("2026-10-01T20:00:00.000Z"),
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual(["postgresql://db.internal/void"]);
+    expect(await body(response)).toEqual({
+      status: "ok",
+      service: "@22void/web",
+      checks: { databaseUrl: true, database: true },
+      time: "2026-10-01T20:00:00.000Z",
+    });
+  });
+
+  it("returns 503 without a database URL or a successful probe", async () => {
+    let missingUrlProbeCalled = false;
+    const missingUrl = await ready({
+      databaseUrl: "",
+      checkDbHealth: async () => {
+        missingUrlProbeCalled = true;
+        return { reachable: true };
+      },
+    });
+    expect(missingUrl.status).toBe(503);
+    expect(await body(missingUrl)).toMatchObject({
+      status: "not_ready",
+      checks: { databaseUrl: false, database: false },
+    });
+    expect(missingUrlProbeCalled).toBe(false);
+
+    const failedProbe = await ready({
+      databaseUrl: "postgresql://db.internal/void",
+      checkDbHealth: async () => {
+        throw new Error("connection details must not be returned");
+      },
+    });
+    expect(failedProbe.status).toBe(503);
+    const payload = (await body(failedProbe)) as { status: string; checks: unknown };
+    expect(payload.status).toBe("not_ready");
+    expect(JSON.stringify(payload)).not.toContain("connection details");
+  });
+
   it("requires an API key for providers", async () => {
     const response = await listProviders(get("http://test.local/api/v1/providers"), deps({}));
     expect(response.status).toBe(401);
@@ -831,12 +881,25 @@ describe("cursor codec integration", () => {
   });
 });
 
+describe("server runtime dependencies", () => {
+  it("reuses the process security dependencies", () => {
+    const first = serverHandlerDeps();
+    const second = serverHandlerDeps();
+    const history = serverHistoryDeps();
+
+    expect(first.security).toBe(second.security);
+    expect(first.security?.rateLimiter).toBe(second.security?.rateLimiter);
+    expect(first.security).toBe(history.security);
+  });
+});
+
 describe("openapi contract", () => {
   it("is a 3.0.3 document covering every endpoint group", () => {
     expect(openApiDocument.openapi).toBe("3.0.3");
     expect(Object.keys(openApiDocument.paths)).toEqual(
       expect.arrayContaining([
         "/health",
+        "/ready",
         "/openapi",
         "/events",
         "/events/{id}",

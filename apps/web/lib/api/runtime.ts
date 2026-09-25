@@ -17,17 +17,15 @@ import type { HistoryHandlerDeps } from "./handlers/history";
  * API_RATE_LIMIT_CAPACITY / API_RATE_LIMIT_REFILL_PER_SECOND) and a
  * Postgres-backed security audit writer.
  */
-function serverSecurity(): SecurityDeps {
-  return {
-    rateLimiter: new ApiRateLimiter(rateLimitConfigFromEnv(process.env)),
-    audit: dbAudit(),
-  };
-}
+const serverSecurityDeps: SecurityDeps = {
+  rateLimiter: new ApiRateLimiter(rateLimitConfigFromEnv(process.env)),
+  audit: dbAudit(),
+};
 
 export function serverHandlerDeps(): HandlerDeps {
-  return { repo: createApiRepo(), env: serverApiEnv(), security: serverSecurity() };
+  return { repo: createApiRepo(), env: serverApiEnv(), security: serverSecurityDeps };
 }
 
 export function serverHistoryDeps(): HistoryHandlerDeps {
-  return { repo: createHistoryRepo(), env: serverApiEnv(), security: serverSecurity() };
+  return { repo: createHistoryRepo(), env: serverApiEnv(), security: serverSecurityDeps };
 }

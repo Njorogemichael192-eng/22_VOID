@@ -21,12 +21,17 @@ test-results/
 .env
 .env*.local
 !.env.example
+!infra/env.prod.example
+infra/.env.prod
 
 # Database
 prisma/*.db
 prisma/*.db-journal
 # Generated Prisma client (@22void/db)
 packages/db/src/generated/
+
+# Production backups (infra/compose.prod.yml backup sidecar)
+infra/backups/
 
 # Logs
 *.log
