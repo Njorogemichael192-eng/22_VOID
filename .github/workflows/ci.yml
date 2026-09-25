@@ -97,7 +97,10 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Secret scan (no committed credentials)
+      - name: Secret scanner self-test
+        run: npm run security:scan:test
+
+      - name: Secret scan (tracked and untracked non-ignored files)
         run: npm run security:scan
 
       - name: Dependency audit (production tree)
@@ -105,3 +108,133 @@ jobs:
 
       - name: Dependency audit (full tree)
         run: npm run audit
+
+  deployment-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install validation tooling
+        run: npm ci
+
+      - name: Generate production validation environment
+        run: |
+          set -euo pipefail
+          cp infra/env.prod.example infra/.env.prod
+          postgres_password="$(openssl rand -hex 24)"
+          api_key="$(openssl rand -hex 32)"
+          admin_api_key="$(openssl rand -hex 32)"
+          odds_api_key="$(openssl rand -hex 32)"
+          sed -i \
+            -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${postgres_password}|" \
+            -e "s|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:${postgres_password}@db:5432/void|" \
+            -e "s|^API_KEY=.*|API_KEY=${api_key}|" \
+            -e "s|^ADMIN_API_KEY=.*|ADMIN_API_KEY=${admin_api_key}|" \
+            -e "s|^WORKER_PROVIDER=.*|WORKER_PROVIDER=mock|" \
+            -e "s|^ODDS_API_KEY=.*|ODDS_API_KEY=${odds_api_key}|" \
+            -e "s|^ODDS_API_BASE_URL=.*|ODDS_API_BASE_URL=|" \
+            -e "s|^SCANNER_POLL_INTERVAL_MS=.*|SCANNER_POLL_INTERVAL_MS=1000|" \
+            -e "s|^DOMAIN=.*|DOMAIN=|" \
+            -e "s|^ACME_EMAIL=.*|ACME_EMAIL=|" \
+            infra/.env.prod
+          chmod 600 infra/.env.prod
+
+      - name: Validate production compose configuration
+        run: npm run compose:prod:config
+
+      - name: Build and start production stack
+        run: docker compose --env-file infra/.env.prod -f infra/compose.prod.yml up --detach --build
+
+      - name: Wait for web and worker health
+        run: |
+          set -euo pipefail
+          compose=(docker compose --env-file infra/.env.prod -f infra/compose.prod.yml)
+          for service in web worker; do
+            container_id="$("${compose[@]}" ps --quiet "$service")"
+            test -n "$container_id"
+            for attempt in $(seq 1 90); do
+              health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container_id" 2>/dev/null || true)"
+              if [ "$health" = "healthy" ]; then
+                break
+              fi
+              if [ "$health" = "unhealthy" ] || [ "$health" = "exited" ] || [ "$health" = "dead" ]; then
+                echo "::error::$service entered state $health"
+                exit 1
+              fi
+              sleep 2
+            done
+            if [ "${health:-}" != "healthy" ]; then
+              echo "::error::Timed out waiting for $service health"
+              exit 1
+            fi
+          done
+
+      - name: Wait for and verify latest backup
+        run: |
+          set -euo pipefail
+          compose=(docker compose --env-file infra/.env.prod -f infra/compose.prod.yml)
+          backup_ready=false
+          for attempt in $(seq 1 60); do
+            container_id="$("${compose[@]}" ps --quiet backup)"
+            state="$(docker inspect --format '{{.State.Status}}' "$container_id" 2>/dev/null || true)"
+            if [ "$state" = "running" ]; then
+              if "${compose[@]}" exec -T backup sh -c 'grep -q "^OK " /backups/status && set -- /backups/void-*.dump && test -s "$1"'; then
+                backup_ready=true
+                break
+              fi
+            fi
+            sleep 2
+          done
+          if [ "$backup_ready" != "true" ]; then
+            echo "::error::Timed out waiting for a successful backup"
+            exit 1
+          fi
+          latest="$("${compose[@]}" exec -T backup sh -c 'ls -1t /backups/void-*.dump | head -n 1')"
+          "${compose[@]}" exec -T backup sh -c 'test -s "$1" && ls -lh "$1" && sha256sum "$1" && test -n "$(pg_restore --list "$1")"' sh "$latest"
+
+      - name: Run production smoke with x-api-key and scanner required
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/smoke-x-api-key.mjs" <<'EOF'
+          const originalFetch = globalThis.fetch;
+          globalThis.fetch = (input, init = {}) => {
+            const headers = new Headers(init.headers);
+            const authorization = headers.get("authorization");
+            if (authorization?.startsWith("Bearer ")) {
+              headers.set("x-api-key", authorization.slice(7));
+              headers.delete("authorization");
+            }
+            return originalFetch(input, { ...init, headers });
+          };
+          EOF
+          smoke_passed=false
+          for attempt in $(seq 1 30); do
+            if SMOKE_BASE_URL=http://127.0.0.1:3000 \
+              SMOKE_API_KEY="$(sed -n 's/^API_KEY=//p' infra/.env.prod)" \
+              SMOKE_REQUIRE_SCANNER=true \
+              NODE_OPTIONS="--import=$RUNNER_TEMP/smoke-x-api-key.mjs" \
+              npm run smoke:prod; then
+              smoke_passed=true
+              break
+            fi
+            sleep 2
+          done
+          test "$smoke_passed" = "true"
+
+      - name: Show deployment logs on failure
+        if: failure()
+        run: |
+          docker compose --env-file infra/.env.prod -f infra/compose.prod.yml ps
+          docker compose --env-file infra/.env.prod -f infra/compose.prod.yml logs --no-color --tail=200
+
+      - name: Tear down production stack
+        if: always()
+        run: |
+          docker compose --env-file infra/.env.prod -f infra/compose.prod.yml down --volumes --remove-orphans
+          rm -f infra/.env.prod

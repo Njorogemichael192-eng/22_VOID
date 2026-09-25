@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+FROM node:22-bookworm-slim AS builder
+
+ENV NEXT_TELEMETRY_DISABLED=1
+WORKDIR /app
+
+COPY package.json package-lock.json prisma.config.ts ./
+COPY apps/web/package.json apps/web/package.json
+COPY packages/arbitrage/package.json packages/arbitrage/package.json
+COPY packages/db/package.json packages/db/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/normalization/package.json packages/normalization/package.json
+COPY packages/outcome-engine/package.json packages/outcome-engine/package.json
+COPY packages/provider-contracts/package.json packages/provider-contracts/package.json
+COPY packages/settlement/package.json packages/settlement/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY tests/regression/package.json tests/regression/package.json
+COPY workers/odds-collector/package.json workers/odds-collector/package.json
+COPY prisma/ prisma/
+
+RUN npm ci
+RUN npx prisma generate
+
+COPY . .
+
+ARG DATABASE_URL=postgresql://unset:unset@localhost:5432/unset
+ENV DATABASE_URL=$DATABASE_URL
+RUN npm run build --workspace @22void/web
+
+FROM node:22-bookworm-slim AS runner
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+
+WORKDIR /app
+
+RUN groupadd --system --gid 1001 nodejs \
+    && useradd --system --uid 1001 --gid nodejs nextjs
+
+COPY infra/scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY infra/scripts/validate-env.sh /usr/local/bin/validate-env.sh
+COPY infra/scripts/migrate.sh /usr/local/bin/migrate.sh
+COPY infra/scripts/health-check.mjs /usr/local/bin/health-check.mjs
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/validate-env.sh /usr/local/bin/migrate.sh
+
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/package-lock.json ./package-lock.json
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/packages ./packages
+
+USER nextjs
+
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["node", "apps/web/server.js"]

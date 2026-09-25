@@ -1,0 +1,30 @@
+name: 22void-prod
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set a valid DOMAIN in infra/.env.prod}
+      ACME_EMAIL: ${ACME_EMAIL:?set a valid ACME_EMAIL in infra/.env.prod}
+      WEB_HOST: web:3000
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./scripts/validate-proxy-env.sh:/usr/local/bin/validate-proxy-env.sh:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    entrypoint: ["/bin/sh", "/usr/local/bin/validate-proxy-env.sh"]
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    networks:
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:
