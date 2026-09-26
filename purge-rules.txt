@@ -1,0 +1,2 @@
+regex:ParlayAPI key \\('([A-Za-z0-9]{24,})'\\)==>ParlayAPI key ('<REDACTED>')
+regex:PARLAY_API_KEY=[A-Za-z0-9]{24,}==>PARLAY_API_KEY=<REDACTED>
