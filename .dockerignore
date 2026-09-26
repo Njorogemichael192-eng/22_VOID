@@ -45,3 +45,21 @@ scripts
 
 # Root documentation is not needed by any build and has carried a secret.
 *.md
+
+# Root non-runtime files, named explicitly rather than relying on the `*.md`
+# glob above. PROJECT_STATE.md carried a real provider key and must never be able
+# to reach a build context again. `.env` is already excluded above; `.env.example`
+# and infra/env.prod.example stay included on purpose (they hold placeholders only).
+/PROJECT_STATE.md
+/BUILD_AGENT_PROMPT.md
+/TECH_STACK.md
+/README.md
+/.editorconfig
+/.prettierrc.json
+/.prettierignore
+/.gitattributes
+/.gitignore
+/docker-compose.yml
+/eslint.config.mjs
+/.vscode
+/.idea

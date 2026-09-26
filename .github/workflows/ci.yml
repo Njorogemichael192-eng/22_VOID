@@ -87,7 +87,11 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
+      # Full history: the history scan walks `git rev-list --all`, and the default
+      # shallow checkout would hide every commit except the tip from it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -102,6 +106,9 @@ jobs:
 
       - name: Secret scan (tracked and untracked non-ignored files)
         run: npm run security:scan
+
+      - name: Secret scan (published git history)
+        run: npm run security:scan:history
 
       - name: Dependency audit (production tree)
         run: npm run audit:prod

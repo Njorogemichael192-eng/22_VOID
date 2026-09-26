@@ -277,8 +277,18 @@ function main(): void {
   );
 }
 
-if (process.argv.includes("--self-test")) {
-  runSelfTest();
-} else {
-  main();
+/**
+ * Only run the CLI when this file is the process entry point. `secret-scan-history.ts`
+ * imports `scanContent` and must not trigger a second full scan of the working tree.
+ */
+const invokedDirectly = /scripts[\\/]secret-scan\.[cm]?[jt]s$/.test(
+  (process.argv[1] ?? "").replace(/\\/g, "/")
+);
+
+if (invokedDirectly) {
+  if (process.argv.includes("--self-test")) {
+    runSelfTest();
+  } else {
+    main();
+  }
 }

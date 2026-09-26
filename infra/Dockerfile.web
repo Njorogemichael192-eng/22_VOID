@@ -21,7 +21,22 @@ COPY prisma/ prisma/
 RUN npm ci
 RUN npx prisma generate
 
-COPY . .
+# Explicit allow-list, never `COPY . .`.
+#
+# `COPY . .` copies whatever survives .dockerignore, so a single missing exclude
+# (or a future file added to the root) silently ships it into a build layer that
+# is cached and hard to audit. PROJECT_STATE.md leaked a live provider key this
+# way. Listing the runtime inputs makes the context fail loudly when a new
+# dependency appears instead of quietly widening the image.
+#
+# Required: root manifests (npm ci / prisma generate), tsconfig.base.json (every
+# workspace tsconfig extends it), prisma/ (client generation), apps/web (the Next
+# build) and packages/ (transpilePackages + standalone output tracing follow the
+# workspace symlinks into these sources).
+COPY tsconfig.base.json ./tsconfig.base.json
+COPY prisma/ prisma/
+COPY apps/ apps/
+COPY packages/ packages/
 
 ARG DATABASE_URL=postgresql://unset:unset@localhost:5432/unset
 ENV DATABASE_URL=$DATABASE_URL

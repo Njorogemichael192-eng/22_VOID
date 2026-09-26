@@ -32,6 +32,7 @@
     "smoke:prod": "tsx scripts/smoke-prod.ts",
     "compose:prod:config": "docker compose --env-file infra/.env.prod -f infra/compose.prod.yml config --quiet",
     "security:scan": "tsx scripts/secret-scan.ts",
+    "security:scan:history": "tsx scripts/secret-scan-history.ts",
     "security:scan:test": "tsx scripts/secret-scan.ts --self-test",
     "audit": "npm audit --audit-level=high",
     "audit:prod": "npm audit --omit=dev --audit-level=high"
