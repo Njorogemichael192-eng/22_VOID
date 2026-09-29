@@ -2,7 +2,8 @@
  * odds-collector entrypoint (Phase 14).
  *
  * Env-driven:
- *   WORKER_PROVIDER              mock (default) | odds-api
+ *   WORKER_PROVIDER              mock (default) | odds-api   (mock is REFUSED under NODE_ENV=production)
+ *   ALLOW_MOCK_PROVIDER_IN_PRODUCTION  true                deliberate demo only; overrides the refusal
  *   ODDS_API_KEY / ODDS_API_BASE_URL             (odds-api provider)
  *   DATABASE_URL                 when set, uses the Postgres store; otherwise in-memory
  *   SCANNER_POLL_INTERVAL_MS     cycle interval in ms (default 15000)
@@ -13,22 +14,18 @@
 
 import "dotenv/config";
 
-import { createServer } from "node:http";
-
 import { MockProvider, OddsApiProvider } from "@22void/provider-contracts";
 import { createPrismaClient } from "@22void/db";
 
 import {
+  ALLOW_MOCK_PROVIDER_ENV,
+  isProductionEnvironment,
   resolveHealthConfig,
   resolveWorkerConfig,
   type ResolvedProviderConfig,
   type ResolvedStoreConfig,
 } from "./config.js";
-import {
-  createHealthRequestHandler,
-  createWorkerHealthState,
-  type WorkerHealthState,
-} from "./health.js";
+import { createHealthServer, createWorkerHealthState, type WorkerHealthState } from "./health.js";
 import { TokenBucketRateLimiter } from "./rate-limit.js";
 import { createScanWorker, nativeScheduler } from "./runtime.js";
 import { createDbWorkerStore, createMemoryWorkerStore } from "./store.js";
@@ -46,6 +43,39 @@ function numberEnv(name: string, fallback: number): number {
 function createProvider(config: ResolvedProviderConfig): MockProvider | OddsApiProvider {
   if (config.kind === "odds-api") return new OddsApiProvider(config.config);
   return new MockProvider();
+}
+
+/**
+ * Reaching this means the mock provider cleared the production gate, i.e.
+ * `ALLOW_MOCK_PROVIDER_IN_PRODUCTION=true` — a deliberate demo, not an accident.
+ * It still gets a banner, because the failure mode this whole guard exists for is
+ * nobody noticing: the cycles succeed, health stays green, and the dashboard shows
+ * tidy arbitrage that does not exist. The store label is in the banner on purpose
+ * — synthetic odds landing in postgres are the case that matters.
+ */
+function warnOnSyntheticProductionData(
+  provider: ResolvedProviderConfig,
+  storeLabel: string
+): void {
+  if (provider.kind !== "mock" || !isProductionEnvironment()) return;
+  const width = 74;
+  const line = (text: string): string => `  # ${text.padEnd(width - 4)}#`;
+  console.warn(
+    [
+      "",
+      `  #${"#".repeat(width)}`,
+      line("PRODUCTION MODE IS SERVING SYNTHETIC ODDS"),
+      line(""),
+      line(`The mock provider is running under NODE_ENV=production because`),
+      line(`${ALLOW_MOCK_PROVIDER_ENV}=true.`),
+      line(`Every price, opportunity and arbitrage below is invented by`),
+      line(`MockProvider, not a bookmaker. Store: ${storeLabel}.`),
+      line(""),
+      line("Never leave this set on a stack anyone reads as real data."),
+      `  #${"#".repeat(width)}`,
+      "",
+    ].join("\n")
+  );
 }
 
 function createStore(config: ResolvedStoreConfig) {
@@ -71,7 +101,16 @@ function healthPort(): number {
 
 function startHealthServer(state: WorkerHealthState, getRunCount: () => number) {
   const port = healthPort();
-  const server = createServer(createHealthRequestHandler({ state, getRunCount }));
+  const server = createHealthServer({ state, getRunCount });
+
+  // Without a listener, EADDRINUSE arrives as an uncaught 'error' event and
+  // kills the process with an opaque stack. The health port is not optional:
+  // a worker that cannot report on itself is a worker nothing can supervise, so
+  // fail fast — but say why first.
+  server.on("error", (error: unknown) => {
+    console.error(`[odds-collector] health server failed to serve on :${port}:`, error);
+    process.exit(1);
+  });
 
   server.listen(port, "0.0.0.0", () => {
     console.log(
@@ -88,6 +127,7 @@ async function main(): Promise<void> {
   const healthConfig = resolveHealthConfig();
   const provider = createProvider(resolved.provider);
   const { store, label } = createStore(resolved.store);
+  warnOnSyntheticProductionData(resolved.provider, label);
   const intervalMs = numberEnv("SCANNER_POLL_INTERVAL_MS", 15_000);
   const capacity = numberEnv("RATE_LIMIT_CAPACITY", 10);
   const refillPerSecond = numberEnv("RATE_LIMIT_REFILL_PER_SECOND", 5);
@@ -147,5 +187,12 @@ const invokedDirectly =
   process.argv[1] !== undefined && process.argv[1].replace(/\\/g, "/").endsWith("main.ts");
 
 if (invokedDirectly) {
-  void main();
+  main().catch((error: unknown) => {
+    // A rejected startup (an invalid WORKER_STALENESS_MS, a bad port, an
+    // unreachable database) would otherwise be an unhandled rejection: fatal in
+    // Node 22, but silent in `docker compose logs`. This container's whole job
+    // is to be restarted and watched, so the reason it died has to be in the log.
+    console.error("[odds-collector] fatal error during startup:", error);
+    process.exit(1);
+  });
 }

@@ -1,10 +1,12 @@
 /**
- * `/api/v1/ready` is unauthenticated and its real probe builds a Prisma client
- * per call, so the result must be memoised. These tests drive the module with a
- * mocked `@22void/db` so the default (non-injected) probe path is exercised.
+ * `/api/v1/ready` is unauthenticated, so its result must be memoised: one probe
+ * serves every caller for the cache window instead of one probe (and one
+ * database connection) per request. These tests drive the module with a mocked
+ * `@22void/db` so the default (non-injected) probe path is exercised.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as mod from "./handlers/system";
 
 const checkDbHealth = vi.fn(async () => ({ reachable: true, latencyMs: 1 }));
 
@@ -15,16 +17,11 @@ vi.mock("@22void/db", () => ({
 const URL_A = "postgresql://user:pass@db.internal:5432/void";
 const URL_B = "postgresql://user:pass@other.internal:5432/void";
 
-type ReadyModule = typeof import("./handlers/system.js");
-
-let mod: ReadyModule;
 let at = 1_000_000;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   checkDbHealth.mockClear();
   checkDbHealth.mockResolvedValue({ reachable: true, latencyMs: 1 });
-  mod = await import("./handlers/system.js");
   mod.resetReadinessCache();
   at = 1_000_000;
 });
@@ -55,7 +52,7 @@ describe("readiness probe memoisation", () => {
   });
 
   it("caches failures too, so a down database is not hammered", async () => {
-    checkDbHealth.mockResolvedValue({ reachable: false });
+    checkDbHealth.mockResolvedValue({ reachable: false, latencyMs: 0 });
     const first = await mod.ready({ databaseUrl: URL_A, now: () => at });
     expect(first.status).toBe(503);
 
@@ -81,6 +78,10 @@ describe("readiness probe memoisation", () => {
       mod.ready({ databaseUrl: URL_A, now: () => at }),
       mod.ready({ databaseUrl: URL_A, now: () => at }),
     ]);
+    // The default probe resolves @22void/db through a dynamic import, so the
+    // mock is not reached until a microtask later; releasing synchronously
+    // would resolve nothing and the assertions below would race the probe.
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     release?.();
 
     const responses = await pending;

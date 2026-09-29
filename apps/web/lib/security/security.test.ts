@@ -14,9 +14,19 @@ import {
   isApiPath,
   pageContentSecurityPolicy,
 } from "./headers";
-import { guardRequest, RATE_LIMITED_AUDIT_INTERVAL_MS, resetGuardAuditThrottle } from "./guard";
+import {
+  guardRequest,
+  resetGuardAuditThrottle,
+  UNAUTHENTICATED_AUDIT_INTERVAL_MS,
+} from "./guard";
 import { memoryAudit, type SecurityAuditEntry } from "./audit";
-import { ApiRateLimiter, clientIp } from "./rate-limit";
+import {
+  ApiRateLimiter,
+  clientIp,
+  rateLimitConfigFromEnv,
+  DEFAULT_API_RATE_LIMIT_CAPACITY,
+  DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND,
+} from "./rate-limit";
 
 const READER_KEY = "reader-secret";
 const ADMIN_KEY = "admin-secret";
@@ -89,22 +99,90 @@ describe("clientIp", () => {
   });
 });
 
+describe("rateLimitConfigFromEnv", () => {
+  it("falls back to the documented defaults when unset or blank", () => {
+    expect(rateLimitConfigFromEnv({})).toEqual({
+      capacity: DEFAULT_API_RATE_LIMIT_CAPACITY,
+      refillPerSecond: DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND,
+    });
+    expect(rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "  " })).toEqual({
+      capacity: DEFAULT_API_RATE_LIMIT_CAPACITY,
+      refillPerSecond: DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND,
+    });
+  });
+
+  it("honours configured values", () => {
+    expect(
+      rateLimitConfigFromEnv({
+        API_RATE_LIMIT_CAPACITY: "30",
+        API_RATE_LIMIT_REFILL_PER_SECOND: "0.5",
+      }),
+    ).toEqual({ capacity: 30, refillPerSecond: 0.5 });
+  });
+
+  it("refuses to silently fall back on a malformed value", () => {
+    // The regression this guards: a typo used to yield the in-code default,
+    // which for a security control is a limit looser than intended and a log
+    // with nothing in it.
+    expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "120/min" })).toThrow(
+      /Invalid API_RATE_LIMIT_CAPACITY/,
+    );
+    expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "0" })).toThrow(
+      /Invalid API_RATE_LIMIT_CAPACITY/,
+    );
+    expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "-5" })).toThrow(
+      /Invalid API_RATE_LIMIT_CAPACITY/,
+    );
+    expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_REFILL_PER_SECOND: "fast" })).toThrow(
+      /Invalid API_RATE_LIMIT_REFILL_PER_SECOND/,
+    );
+  });
+
+  it("ignores the worker's RATE_LIMIT_* names", () => {
+    // They guard outbound provider polling in the collector, not inbound API
+    // traffic. Accepting them here is how the public API stayed on defaults.
+    const config = rateLimitConfigFromEnv({
+      RATE_LIMIT_CAPACITY: "10",
+      RATE_LIMIT_REFILL_PER_SECOND: "5",
+    });
+    expect(config.capacity).toBe(DEFAULT_API_RATE_LIMIT_CAPACITY);
+    expect(config.refillPerSecond).toBe(DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Request guard: layering + audit capture
 // ---------------------------------------------------------------------------
 
 describe("guardRequest", () => {
-  it("rejects a non-GET method with 405 + Allow header, audited", async () => {
+  it("rejects a non-GET method with 405 + Allow header, audited for an authenticated caller", async () => {
     const log: SecurityAuditEntry[] = [];
     const response = guardRequest(
-      new Request("http://localhost/api/v1/events", { method: "POST" }),
+      new Request("http://localhost/api/v1/events", {
+        method: "POST",
+        headers: { "x-api-key": READER_KEY },
+      }),
       { env, security: { audit: memoryAudit(log) } },
     );
     expect(isResponse(response)).toBe(true);
     expect((response as Response).status).toBe(405);
     expect((response as Response).headers.get("allow")).toBe("GET");
     await settle();
-    expect(log.some((e) => e.action === "METHOD_NOT_ALLOWED" && e.actor === "unknown")).toBe(true);
+    expect(log.some((e) => e.action === "METHOD_NOT_ALLOWED")).toBe(true);
+  });
+
+  it("answers 405 to an unauthenticated POST but writes no audit row", async () => {
+    // Phase 18: auditing this pre-auth rejection let an unauthenticated flood
+    // amplify into one auditLog.create per request.
+    const log: SecurityAuditEntry[] = [];
+    const response = guardRequest(new Request("http://localhost/api/v1/events", { method: "POST" }), {
+      env,
+      security: { audit: memoryAudit(log) },
+    });
+    expect((response as Response).status).toBe(405);
+    expect((response as Response).headers.get("allow")).toBe("GET");
+    await settle();
+    expect(log).toHaveLength(0);
   });
 
   it("rejects a request carrying a body on a read API", () => {
@@ -170,7 +248,7 @@ describe("guardRequest", () => {
     await settle();
     expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(1);
 
-    at += RATE_LIMITED_AUDIT_INTERVAL_MS + 1;
+    at += UNAUTHENTICATED_AUDIT_INTERVAL_MS + 1;
     expect((guardRequest(get(url, READER_KEY, "7.7.7.7"), deps) as Response).status).toBe(429);
     await settle();
     expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(2);
@@ -194,8 +272,82 @@ describe("guardRequest", () => {
     }
 
     await settle();
-    expect(log.filter((e) => e.action === "METHOD_NOT_ALLOWED")).toHaveLength(2);
+    // The two in-budget POSTs are unauthenticated, so neither audits any more.
+    expect(log.filter((e) => e.action === "METHOD_NOT_ALLOWED")).toHaveLength(0);
     expect(log.filter((e) => e.action === "RATE_LIMITED")).toHaveLength(1);
+    resetGuardAuditThrottle();
+  });
+
+  it("writes no audit rows for a large unauthenticated POST flood", async () => {
+    // The headline Phase 18 property: an unauthenticated flood of wrong-method
+    // requests must not be able to turn rejections into database writes.
+    resetGuardAuditThrottle();
+    const log: SecurityAuditEntry[] = [];
+    const limiter = new ApiRateLimiter({ capacity: 10_000, refillPerSecond: 10_000 });
+    const deps = { env, security: { rateLimiter: limiter, audit: memoryAudit(log) } };
+    const url = "http://localhost/api/v1/events";
+
+    for (let i = 0; i < 1000; i += 1) {
+      const response = guardRequest(
+        new Request(url, {
+          method: "POST",
+          // A rotating forwarded-for, which is what an attacker spoofing the
+          // rate-limit key would do.
+          headers: { "x-forwarded-for": `10.0.0.${i % 255}` },
+        }),
+        deps,
+      );
+      expect((response as Response).status).toBe(405);
+    }
+
+    await settle();
+    expect(log).toHaveLength(0);
+    resetGuardAuditThrottle();
+  });
+
+  it("throttles AUTH_FAILED so a keyless flood cannot flood the audit table", async () => {
+    resetGuardAuditThrottle();
+    const log: SecurityAuditEntry[] = [];
+    let at = 1_000;
+    const limiter = new ApiRateLimiter({ capacity: 10_000, refillPerSecond: 10_000 });
+    const deps = {
+      env,
+      security: { rateLimiter: limiter, audit: memoryAudit(log), now: () => at },
+    };
+    const url = "http://localhost/api/v1/events";
+
+    for (let i = 0; i < 200; i += 1) {
+      expect((guardRequest(get(url, undefined, "5.5.5.5"), deps) as Response).status).toBe(401);
+    }
+    await settle();
+    expect(log.filter((e) => e.action === "AUTH_FAILED")).toHaveLength(1);
+
+    // Still throttled just inside the window, then allowed again after it.
+    at += UNAUTHENTICATED_AUDIT_INTERVAL_MS - 1;
+    expect((guardRequest(get(url, undefined, "5.5.5.5"), deps) as Response).status).toBe(401);
+    await settle();
+    expect(log.filter((e) => e.action === "AUTH_FAILED")).toHaveLength(1);
+
+    at += 2;
+    expect((guardRequest(get(url, undefined, "5.5.5.5"), deps) as Response).status).toBe(401);
+    await settle();
+    expect(log.filter((e) => e.action === "AUTH_FAILED")).toHaveLength(2);
+    resetGuardAuditThrottle();
+  });
+
+  it("still audits a wrong-method request that carries a valid key", async () => {
+    // The gate must not be so blunt that it silences real authenticated clients.
+    resetGuardAuditThrottle();
+    const log: SecurityAuditEntry[] = [];
+    const limiter = new ApiRateLimiter({ capacity: 10, refillPerSecond: 10 });
+    const deps = { env, security: { rateLimiter: limiter, audit: memoryAudit(log) } };
+    const url = "http://localhost/api/v1/events";
+
+    for (let i = 0; i < 5; i += 1) {
+      guardRequest(new Request(url, { method: "POST", headers: { "x-api-key": READER_KEY } }), deps);
+    }
+    await settle();
+    expect(log.filter((e) => e.action === "METHOD_NOT_ALLOWED")).toHaveLength(5);
     resetGuardAuditThrottle();
   });
 
@@ -282,6 +434,7 @@ describe("secrets server-side only", () => {
     "DASHBOARD_SOURCE",
     "DATABASE_URL",
     "NODE_ENV",
+    "READINESS_ALLOWED_CIDRS",
   ]);
 
   it("never reads a NEXT_PUBLIC_* secret and only reads allowlisted env vars", () => {
@@ -300,6 +453,88 @@ describe("secrets server-side only", () => {
       read.path.startsWith(`components${sep}`),
     );
     expect(clientLayer).toHaveLength(0);
+  });
+});
+
+/**
+ * The edge sits in front of an app that already sends a route-aware security
+ * header set, and Caddy's `header` directive REPLACES rather than merges. So
+ * every header listed in both places is a chance for the edge to silently
+ * weaken the app's policy — which is exactly what happened: a site-wide CSP
+ * overwrote the API's `default-src 'none'; ...; sandbox`, and a shorter HSTS
+ * max-age overwrote the app's. These assertions encode the rule that the edge
+ * must never weaken what the app sends.
+ */
+describe("Caddy edge headers do not weaken the app's policy", () => {
+  const caddyfile = readFileSync(
+    resolve(import.meta.dirname, "..", "..", "..", "..", "infra", "Caddyfile"),
+    "utf8",
+  );
+
+  /** Every `header` directive in the Caddyfile, with its optional matcher block. */
+  function caddyHeaderDirectives(): { header: string; value: string; matcher: string }[] {
+    const found: { header: string; value: string; matcher: string }[] = [];
+    const lines = caddyfile.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = (lines[i] ?? "").trim();
+      const single = line.match(/^header\s+(-?\S+)\s+"([^"]*)"\s*\{\s*$/);
+      const inBlock = line.match(/^(-?[A-Za-z-]+)\s+"([^"]*)"\s*$/);
+      if (single) {
+        // Consume the matcher block that follows.
+        const matcher: string[] = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          const next = (lines[j] ?? "").trim();
+          if (next === "}") break;
+          matcher.push(next);
+        }
+        found.push({ header: single[1]!, value: single[2]!, matcher: matcher.join(" ") });
+      } else if (inBlock) {
+        found.push({ header: inBlock[1]!, value: inBlock[2]!, matcher: "" });
+      }
+    }
+    return found;
+  }
+
+  it("scopes the CSP away from /api/* so the app's stricter API policy survives", () => {
+    const cspDirectives = caddyHeaderDirectives().filter((d) => d.header === "Content-Security-Policy");
+    expect(cspDirectives.length).toBeGreaterThan(0);
+
+    for (const directive of cspDirectives) {
+      // Without a matcher this is site-wide, which is the bug: the JSON API
+      // would inherit `script-src 'unsafe-inline'` and lose its `sandbox`.
+      expect(directive.matcher).not.toBe("");
+      expect(directive.matcher).toContain("not path");
+      // `/api` alone is matched too, so a bare `/api` cannot slip through.
+      expect(directive.matcher).toMatch(/not path\s+\/api\s+\/api\/\*/);
+    }
+  });
+
+  it("never sets the API CSP policy at the edge", () => {
+    const cspValues = caddyHeaderDirectives()
+      .filter((d) => d.header === "Content-Security-Policy")
+      .map((d) => d.value);
+    // If a future edit pastes the API policy into the Caddyfile it would have to
+    // be scoped to /api/* at most; as a page policy it would be wrong.
+    for (const value of cspValues) {
+      expect(value).not.toContain("sandbox");
+      expect(value).not.toContain("default-src 'none'");
+    }
+  });
+
+  it("sends a page CSP identical to the app's, so the override is a no-op", () => {
+    const edge = caddyHeaderDirectives().find((d) => d.header === "Content-Security-Policy");
+    expect(edge?.value).toBe(pageContentSecurityPolicy());
+  });
+
+  it("does not weaken any header it duplicates from the app", () => {
+    const edge = new Map(caddyHeaderDirectives().map((d) => [d.header, d.value]));
+    const overTls = baseSecurityHeaders(true);
+
+    for (const [name, appValue] of Object.entries(overTls)) {
+      const edgeValue = edge.get(name);
+      if (edgeValue === undefined) continue; // not duplicated: the app's value stands
+      expect(edgeValue).toBe(appValue);
+    }
   });
 });
 

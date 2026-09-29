@@ -29,8 +29,17 @@ const STALE_RUN_MS = 5 * 60 * 1000;
  */
 export const READINESS_CACHE_TTL_MS = 5_000;
 
-/** Wall-clock budget for one real database probe. */
-export const READINESS_PROBE_TIMEOUT_MS = 5_000;
+/**
+ * Wall-clock budget for one real database probe.
+ *
+ * Two seconds, not the previous five: this endpoint is unauthenticated and
+ * Caddy's active health check allows a 5s response, so a probe that only
+ * resolves at the edge of that window makes the whole site flap — the load
+ * balancer gives up on a backend that would have answered a moment later. Two
+ * seconds leaves headroom inside the 5s budget while still failing fast when
+ * Postgres is unreachable.
+ */
+export const READINESS_PROBE_TIMEOUT_MS = 2_000;
 
 export type DbHealthProbe = (
   connectionString: string,

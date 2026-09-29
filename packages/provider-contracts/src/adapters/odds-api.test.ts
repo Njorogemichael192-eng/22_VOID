@@ -27,7 +27,6 @@ describe("OddsApiProvider", () => {
     const result = await provider.poll();
     const url = decodeURIComponent(String(fetchMock.mock.calls[0]?.[0] ?? ""));
     expect(url).toContain("/v4/sports/soccer_epl/odds");
-    expect(url).toContain("apiKey=test-key");
     expect(url).toContain("regions=uk,eu");
     expect(url).toContain("markets=h2h,totals");
     expect(url).toContain("oddsFormat=decimal");
@@ -91,5 +90,73 @@ describe("OddsApiProvider", () => {
     expect(url).toContain("/v4/sports/soccer_spain_la_liga/odds");
     expect(url).toContain("regions=us2,eu");
     expect(url).toContain("markets=h2h");
+  });
+});
+
+describe("OddsApiProvider transport", () => {
+  it("sends the key as a header and never in the query string", async () => {
+    const fetchMock = stubFetch(ODDS_API_SOCCER_RAW);
+    await new OddsApiProvider({ apiKey: "sk-live-1234567890" }).poll();
+
+    const url = String(fetchMock.mock.calls[0]?.[0] ?? "");
+    expect(url).not.toContain("sk-live-1234567890");
+    expect(decodeURIComponent(url)).not.toMatch(/[?&]api[_-]?key=/i);
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.["x-api-key"]).toBe("sk-live-1234567890");
+  });
+
+  it("keeps the key out of the health probe URL too", async () => {
+    const fetchMock = stubFetch([]);
+    await new OddsApiProvider({ apiKey: "sk-live-1234567890" }).health();
+
+    const url = String(fetchMock.mock.calls[0]?.[0] ?? "");
+    expect(url).toBe("https://api.the-odds-api.com/v4/sports");
+    expect(url).not.toContain("sk-live-1234567890");
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.["x-api-key"]).toBe("sk-live-1234567890");
+  });
+
+  it("honours the explicit query-auth escape hatch", async () => {
+    const fetchMock = stubFetch(ODDS_API_SOCCER_RAW);
+    await new OddsApiProvider({ apiKey: "test-key", authInQuery: true }).poll();
+
+    const url = decodeURIComponent(String(fetchMock.mock.calls[0]?.[0] ?? ""));
+    expect(url).toContain("apiKey=test-key");
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    const headers = init?.headers as Record<string, string> | undefined;
+    expect(headers?.["x-api-key"]).toBeUndefined();
+  });
+
+  it("names the escape hatch when header auth is rejected", async () => {
+    stubFetch(null, false, 401);
+    const provider = new OddsApiProvider({ apiKey: "wrong-key" });
+    await expect(provider.poll()).rejects.toThrow(/ODDS_API_AUTH_IN_QUERY/);
+  });
+
+  it("does not add the auth hint to unrelated failures", async () => {
+    stubFetch(null, false, 429);
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+    await expect(provider.poll()).rejects.toSatisfy(
+      (error: unknown) => error instanceof ProviderTransportError && error.status === 429
+    );
+    await expect(provider.poll()).rejects.not.toThrow(/ODDS_API_AUTH_IN_QUERY/);
+  });
+
+  it("never leaks the key through a transport error message", async () => {
+    // The old redaction only knew the literal parameter name `apiKey`.
+    const key = "sk-live-1234567890";
+    stubFetch(null, false, 500);
+    const provider = new OddsApiProvider({ apiKey: key, authInQuery: true });
+    await expect(provider.poll()).rejects.toSatisfy((error: unknown) => {
+      const message = (error as Error).message;
+      expect(message).not.toContain(key);
+      expect(message).not.toMatch(/[?&]api[_-]?key=/i);
+      return true;
+    });
   });
 });

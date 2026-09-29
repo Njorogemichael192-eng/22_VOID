@@ -113,13 +113,56 @@ export function clientIp(request: Request): string {
   return "unknown";
 }
 
-/** Parse configured limiter options from environment (runtime only). */
-export function rateLimitConfigFromEnv(env: NodeJS.ProcessEnv): ApiRateLimitConfig {
-  const capacity = Number(env.API_RATE_LIMIT_CAPACITY);
-  const refillPerSecond = Number(env.API_RATE_LIMIT_REFILL_PER_SECOND);
+/** Burst capacity when `API_RATE_LIMIT_CAPACITY` is unset. */
+export const DEFAULT_API_RATE_LIMIT_CAPACITY = 120;
+/** Sustained refill when `API_RATE_LIMIT_REFILL_PER_SECOND` is unset. */
+export const DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND = 2;
+
+/**
+ * The slice of the environment this module reads.
+ *
+ * Deliberately not `NodeJS.ProcessEnv`: Next.js augments that interface with a
+ * *required* `NODE_ENV`, so depending on it here would force every caller and
+ * every test to fabricate a field the function never touches.
+ */
+export type RateLimitEnv = Readonly<Record<string, string | undefined>>;
+
+/**
+ * Read one positive number from the environment.
+ *
+ * Unset (or blank) takes the default — that is the normal case. A value that is
+ * present but unusable is an operator mistake, and quietly substituting the
+ * default is how a rate limit ends up an order of magnitude looser than intended
+ * with nothing in the logs. This throws instead, matching `numberEnv` in the
+ * worker entrypoint and `healthPort`; the cost is that a typo takes the API down
+ * rather than silently disarming it, which is the right trade for a control whose
+ * whole job is to refuse traffic.
+ */
+function positiveEnvNumber(env: RateLimitEnv, name: string, fallback: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim().length === 0) return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid ${name}=${raw}: expected a positive number`);
+  }
+  return value;
+}
+
+/**
+ * Parse configured limiter options from environment (runtime only).
+ *
+ * These are the *web* knobs. They are not the worker's `RATE_LIMIT_CAPACITY` /
+ * `RATE_LIMIT_REFILL_PER_SECOND`, which limit outbound provider polling in the
+ * collector; conflating the two is how the public API ends up on this hardcoded
+ * default while an operator believes they tuned it.
+ */
+export function rateLimitConfigFromEnv(env: RateLimitEnv): ApiRateLimitConfig {
   return {
-    capacity: Number.isFinite(capacity) && capacity > 0 ? capacity : 120,
-    refillPerSecond:
-      Number.isFinite(refillPerSecond) && refillPerSecond > 0 ? refillPerSecond : 2,
+    capacity: positiveEnvNumber(env, "API_RATE_LIMIT_CAPACITY", DEFAULT_API_RATE_LIMIT_CAPACITY),
+    refillPerSecond: positiveEnvNumber(
+      env,
+      "API_RATE_LIMIT_REFILL_PER_SECOND",
+      DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND,
+    ),
   };
 }

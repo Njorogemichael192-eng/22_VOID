@@ -50,7 +50,10 @@ function optionalProviderValue(
   return value;
 }
 
-function resolveBaseUrl(raw: string | undefined): string | undefined {
+/** Query parameters that would carry a credential in the URL. */
+const CREDENTIAL_QUERY_PARAM = /^(api[-_]?key|key|token|access[-_]?token|password|secret|sig|signature)$/i;
+
+function resolveBaseUrl(raw: string | undefined, production: boolean): string | undefined {
   if (raw === undefined) return undefined;
   const value = raw.trim();
   if (value === "") invalidConfig("ODDS_API_BASE_URL", "a non-empty URL");
@@ -64,8 +67,50 @@ function resolveBaseUrl(raw: string | undefined): string | undefined {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     invalidConfig("ODDS_API_BASE_URL", "an http or https URL");
   }
-  if (parsed.hostname === "") invalidConfig("ODDS_API_BASE_URL", "a URL with a host");
+
+  // A production provider URL carries a live API key on every request, so the
+  // transport has to be encrypted. `http://` is accepted outside production for
+  // a local stub, which is the only place it is ever legitimate.
+  if (production && parsed.protocol !== "https:") {
+    invalidConfig(
+      "ODDS_API_BASE_URL",
+      "an https:// URL in production (the provider key is sent on every request; " +
+        "http:// is only allowed outside production, e.g. a local test stub)"
+    );
+  }
+
+  // Embedded userinfo is a credential in the URL by another name, and survives
+  // in logs, .env files and process listings. Never legitimate.
+  if (parsed.username !== "" || parsed.password !== "") {
+    invalidConfig("ODDS_API_BASE_URL", "a URL without embedded credentials (no user:password@)");
+  }
+
+  // A key smuggled into the base URL's query string would defeat header auth
+  // entirely, so refuse it rather than let the two mechanisms coexist silently.
+  for (const name of parsed.searchParams.keys()) {
+    if (CREDENTIAL_QUERY_PARAM.test(name)) {
+      invalidConfig(
+        "ODDS_API_BASE_URL",
+        "a URL without a credential query parameter; pass the key via ODDS_API_KEY instead"
+      );
+    }
+  }
+
   return value;
+}
+
+/**
+ * Opt-in that permits the mock provider under `NODE_ENV=production`.
+ *
+ * Named at length on purpose. The only defensible reason to set it is a demo or
+ * a smoke test that wants a production-shaped stack (real Postgres, real
+ * migrations) without spending provider quota — and a flag that expensive to
+ * type, greppable in an env file, and visible in the startup log is the point.
+ */
+export const ALLOW_MOCK_PROVIDER_ENV = "ALLOW_MOCK_PROVIDER_IN_PRODUCTION";
+
+function mockProviderAllowed(env: WorkerEnvironment): boolean {
+  return (env[ALLOW_MOCK_PROVIDER_ENV] ?? "").trim().toLowerCase() === "true";
 }
 
 export function resolveProviderConfig(
@@ -75,30 +120,51 @@ export function resolveProviderConfig(
   const configuredProvider = env.WORKER_PROVIDER;
 
   if (production && !hasText(configuredProvider)) {
-    invalidConfig("WORKER_PROVIDER", "mock or odds-api");
+    // The default is `mock`, and production requires an explicit choice precisely
+    // because that default fabricates data.
+    invalidConfig("WORKER_PROVIDER", "odds-api (the mock provider is refused in production)");
   }
-  if (production && configuredProvider !== "mock" && configuredProvider !== "odds-api") {
-    throw new Error(`Unknown WORKER_PROVIDER=${configuredProvider ?? ""}`);
+  if (configuredProvider !== undefined && configuredProvider !== "mock" && configuredProvider !== "odds-api") {
+    throw new Error(`Unknown WORKER_PROVIDER=${configuredProvider}`);
   }
 
   const providerKind = configuredProvider ?? "mock";
-  if (providerKind !== "odds-api") return { kind: "mock" };
+  if (providerKind !== "odds-api") {
+    if (production && !mockProviderAllowed(env)) {
+      // The damaging combination is mock + production + DATABASE_URL: the store
+      // resolves to postgres, so synthetic odds are persisted and then read back
+      // and served as genuine opportunities. Nothing about that state looks wrong
+      // from the outside - the cycles succeed and the worker reports healthy.
+      throw new Error(
+        "Refusing to run WORKER_PROVIDER=mock in production: it fabricates odds, and with " +
+          "DATABASE_URL set those synthetic rows are persisted and served as real opportunities. " +
+          "Set WORKER_PROVIDER=odds-api, or set " +
+          `${ALLOW_MOCK_PROVIDER_ENV}=true if this is deliberately a demo.`
+      );
+    }
+    return { kind: "mock" };
+  }
 
   const apiKey = env.ODDS_API_KEY?.trim();
   if (apiKey === undefined || apiKey === "") {
     throw new Error("WORKER_PROVIDER=odds-api requires a non-empty ODDS_API_KEY");
   }
 
-  const baseUrl = resolveBaseUrl(env.ODDS_API_BASE_URL);
+  const baseUrl = resolveBaseUrl(env.ODDS_API_BASE_URL, production);
   const regions = optionalProviderValue(env, "ODDS_API_REGIONS", production);
   const markets = optionalProviderValue(env, "ODDS_API_MARKETS", production);
   const defaultSportKey = optionalProviderValue(env, "ODDS_API_SPORT", production);
+  // Off by default: a credential in the query string is copied into every proxy
+  // and CDN access log on the path. Only for a provider that rejects the
+  // `x-api-key` header the adapter now sends.
+  const authInQuery = (env.ODDS_API_AUTH_IN_QUERY ?? "").trim().toLowerCase() === "true";
   const config: OddsApiProviderConfig = {
     apiKey,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     ...(regions === undefined ? {} : { regions }),
     ...(markets === undefined ? {} : { markets }),
     ...(defaultSportKey === undefined ? {} : { defaultSportKey }),
+    ...(authInQuery ? { authInQuery } : {}),
   };
 
   return { kind: "odds-api", config };

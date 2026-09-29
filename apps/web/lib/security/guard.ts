@@ -9,15 +9,25 @@
  *   3. body — a read API never accepts a payload (400/413);
  *   4. authorization — reader/admin API keys via the Phase 12 auth envelope.
  *
- * Rate limiting runs first on purpose. Every rejection below it writes an audit
- * row, so checking it afterwards let an unauthenticated flood (for example a
- * stream of POSTs) turn one cheap rejection into one database write per
- * request. With the limiter first, sustained flood traffic is answered from
- * memory and never reaches the audit port.
+ * Response precedence is unchanged by the Phase 18 audit work below: a wrong
+ * method still answers 405 whether or not a key was supplied. What changed is
+ * *who gets an audit row written for it*.
  *
- * Rejections that are not rate-limit rejections still audit unconditionally, but
- * 429s are additionally throttled to at most one row per caller per
- * RATE_LIMITED_AUDIT_INTERVAL_MS, since a blocked caller generates them fastest.
+ * `authenticate` is hoisted above the method and body checks so their audits can
+ * be gated on the caller being authenticated. It is a pure key comparison with no
+ * side effects, so evaluating it early cannot change any response. Previously an
+ * unauthenticated POST to a GET-only route wrote one `auditLog.create` row per
+ * request *before* any credential was checked, so a single unauthenticated flood
+ * turned into a database write amplification DoS — bounded only by the token
+ * bucket, whose key is the caller-supplied `x-forwarded-for` and therefore
+ * trivially rotated. An unauthenticated request now writes at most a throttled
+ * `AUTH_FAILED` row, and a wrong-method POST writes none at all.
+ *
+ * Rejections reachable without a valid key (`RATE_LIMITED`, `AUTH_FAILED`) audit
+ * at most once per caller per `UNAUTHENTICATED_AUDIT_INTERVAL_MS`, because a
+ * blocked or keyless caller generates them fastest and they are the rows an
+ * attacker controls. Rejections that require a valid key (wrong method, bad body,
+ * insufficient role) and successful admin access always audit.
  */
 
 import { authenticate, type ApiAuthEnv, type ApiRole } from "../api/auth";
@@ -27,26 +37,45 @@ import { ApiRateLimiter, clientIp } from "./rate-limit";
 
 export const MAX_API_BODY_BYTES = 64 * 1024;
 
-/** Minimum gap between two RATE_LIMITED audit rows for the same caller. */
-export const RATE_LIMITED_AUDIT_INTERVAL_MS = 60_000;
+/**
+ * Minimum gap between two audit rows for the same caller *and* action, applied
+ * only to the rejection codes an unauthenticated caller can reach. Overridden by
+ * SecurityDeps.auditThrottleMs (0 disables throttling) so tests can drive it
+ * without sleeping; the default interval is real time, not a test artefact.
+ */
+export const UNAUTHENTICATED_AUDIT_INTERVAL_MS = 60_000;
 
 /** Upper bound on tracked throttled callers, so the map cannot grow unbounded. */
 const RATE_LIMITED_AUDIT_MAX_KEYS = 10_000;
 
-const rateLimitedAuditedAt = new Map<string, number>();
+const unauthenticatedAuditedAt = new Map<string, number>();
 
 /** Test helper: forget every throttled caller. */
 export function resetGuardAuditThrottle(): void {
-  rateLimitedAuditedAt.clear();
+  unauthenticatedAuditedAt.clear();
 }
 
-function shouldAuditRateLimited(ip: string, at: number): boolean {
-  const lastAuditedAt = rateLimitedAuditedAt.get(ip);
-  if (lastAuditedAt !== undefined && at - lastAuditedAt < RATE_LIMITED_AUDIT_INTERVAL_MS) {
+/**
+ * True at most once per throttle window for a given (caller, action) pair.
+ * `now` is passed in rather than read from the clock so callers driving a fake
+ * clock in tests get the same behaviour they would get in production.
+ */
+function shouldAuditThrottled(
+  ip: string,
+  action: string,
+  at: number,
+  intervalMs: number,
+): boolean {
+  if (intervalMs <= 0) return true;
+  const key = `${action}|${ip}`;
+  const lastAuditedAt = unauthenticatedAuditedAt.get(key);
+  if (lastAuditedAt !== undefined && at - lastAuditedAt < intervalMs) {
     return false;
   }
-  if (rateLimitedAuditedAt.size >= RATE_LIMITED_AUDIT_MAX_KEYS) rateLimitedAuditedAt.clear();
-  rateLimitedAuditedAt.set(ip, at);
+  if (unauthenticatedAuditedAt.size >= RATE_LIMITED_AUDIT_MAX_KEYS) {
+    unauthenticatedAuditedAt.clear();
+  }
+  unauthenticatedAuditedAt.set(key, at);
   return true;
 }
 
@@ -57,6 +86,11 @@ export interface SecurityDeps {
   methods?: ReadonlyArray<string>;
   /** Accept a non-empty body up to this many bytes; default 64 KiB. */
   maxBodyBytes?: number;
+  /**
+   * Minimum gap between throttled unauthenticated-audits for one caller and
+   * action. Defaults to UNAUTHENTICATED_AUDIT_INTERVAL_MS; 0 audits every one.
+   */
+  auditThrottleMs?: number;
   /** Clock override for deterministic tests. */
   now?: () => number;
 }
@@ -74,6 +108,7 @@ export function guardRequest(
   const methods = security.methods ?? ["GET"];
   const maxBodyBytes = security.maxBodyBytes ?? MAX_API_BODY_BYTES;
   const now = security.now ?? (() => Date.now());
+  const auditThrottleMs = security.auditThrottleMs ?? UNAUTHENTICATED_AUDIT_INTERVAL_MS;
   const ip = clientIp(request);
   const path = new URL(request.url).pathname;
 
@@ -89,7 +124,7 @@ export function guardRequest(
       { retryAfterMs: limit.retryAfterMs },
     );
     response.headers.set("retry-after", String(Math.ceil(limit.retryAfterMs / 1000)));
-    if (shouldAuditRateLimited(ip, now())) {
+    if (shouldAuditThrottled(ip, "RATE_LIMITED", now(), auditThrottleMs)) {
       void audit.record({
         action: "RATE_LIMITED",
         actor: ip,
@@ -99,6 +134,13 @@ export function guardRequest(
     return response;
   }
 
+  // Resolved before the method and body checks purely so their audits can be
+  // gated on a valid key. Pure function, no side effects, and the responses below
+  // are unchanged: an unauthenticated POST still gets 405, it just no longer
+  // costs a database write.
+  const role = authenticate(request, deps.env);
+  const authenticated = role !== null;
+
   if (!methods.includes(request.method)) {
     const response = jsonError(
       "METHOD_NOT_ALLOWED",
@@ -106,11 +148,13 @@ export function guardRequest(
       405,
     );
     response.headers.set("allow", methods.join(", "));
-    void audit.record({
-      action: "METHOD_NOT_ALLOWED",
-      actor: ip,
-      detail: { method: request.method, path },
-    });
+    if (authenticated) {
+      void audit.record({
+        action: "METHOD_NOT_ALLOWED",
+        actor: ip,
+        detail: { method: request.method, path },
+      });
+    }
     return response;
   }
 
@@ -122,11 +166,15 @@ export function guardRequest(
         `Request body exceeds the ${maxBodyBytes} byte limit.`,
         413,
       );
-      void audit.record({
-        action: "PAYLOAD_TOO_LARGE",
-        actor: ip,
-        detail: { bytes: contentLength, limit: maxBodyBytes },
-      });
+      // Same gate as the method check: an unauthenticated flood must not be able
+      // to reach the audit port by sending a body instead of relying on 405.
+      if (authenticated) {
+        void audit.record({
+          action: "PAYLOAD_TOO_LARGE",
+          actor: ip,
+          detail: { bytes: contentLength, limit: maxBodyBytes },
+        });
+      }
       return response;
     }
     const response = jsonError(
@@ -134,27 +182,30 @@ export function guardRequest(
       "The API is read-only; requests must not carry a body.",
       400,
     );
-    void audit.record({ action: "REQUEST_BODY_NOT_ALLOWED", actor: ip });
+    if (authenticated) {
+      void audit.record({ action: "REQUEST_BODY_NOT_ALLOWED", actor: ip });
+    }
     return response;
   }
 
-  const role = authenticate(request, deps.env);
-  if (role === null) {
+  if (!authenticated) {
     const keyPresent = request.headers.get("x-api-key") !== null;
     const response = jsonError(
       "UNAUTHORIZED",
       "Missing or invalid API key. Send it in the \"x-api-key\" header.",
       401,
     );
-    void audit.record({
-      action: "AUTH_FAILED",
-      actor: ip,
-      detail: {
-        keyPresent,
-        path,
-        reason: "no valid role for supplied key",
-      },
-    });
+    if (shouldAuditThrottled(ip, "AUTH_FAILED", now(), auditThrottleMs)) {
+      void audit.record({
+        action: "AUTH_FAILED",
+        actor: ip,
+        detail: {
+          keyPresent,
+          path,
+          reason: "no valid role for supplied key",
+        },
+      });
+    }
     return response;
   }
 

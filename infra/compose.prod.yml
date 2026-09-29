@@ -56,6 +56,15 @@ services:
       DASHBOARD_SOURCE: ${DASHBOARD_SOURCE:-db}
       API_KEY: ${API_KEY:?set API_KEY in infra/.env.prod}
       ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in infra/.env.prod}
+      READINESS_ALLOWED_CIDRS: ${READINESS_ALLOWED_CIDRS:-}
+      # The public API's token bucket. These are NOT the worker's
+      # RATE_LIMIT_* (those cap outbound provider polling in the collector).
+      # They were previously absent here altogether, so the only limiter facing
+      # the internet always ran on the in-code 120/2 default no matter what an
+      # operator set. Spelled out rather than left blank so `docker compose
+      # config` shows the limit actually in force.
+      API_RATE_LIMIT_CAPACITY: ${API_RATE_LIMIT_CAPACITY:-120}
+      API_RATE_LIMIT_REFILL_PER_SECOND: ${API_RATE_LIMIT_REFILL_PER_SECOND:-2}
     healthcheck:
       test:
         [
@@ -88,8 +97,19 @@ services:
       SERVICE_ROLE: worker
       NODE_ENV: production
       WORKER_PROVIDER: ${WORKER_PROVIDER:-odds-api}
+      # The worker refuses WORKER_PROVIDER=mock under NODE_ENV=production and
+      # exits. This override is the only way through, and it exists for demos that
+      # want a production-shaped stack without provider quota. It is wired here
+      # rather than left implicit so that setting it in .env.prod has a
+      # predictable effect instead of being silently dropped; leave it empty.
+      ALLOW_MOCK_PROVIDER_IN_PRODUCTION: ${ALLOW_MOCK_PROVIDER_IN_PRODUCTION:-}
       ODDS_API_KEY: ${ODDS_API_KEY:-}
       ODDS_API_BASE_URL: ${ODDS_API_BASE_URL:-https://api.the-odds-api.com}
+      # Must be https in production - the worker refuses http:// here. The
+      # provider key travels in the x-api-key header, never in the query string,
+      # so it is not copied into proxy/CDN access logs. Set this only if the
+      # provider rejects header auth; it puts the key back in the URL.
+      ODDS_API_AUTH_IN_QUERY: ${ODDS_API_AUTH_IN_QUERY:-}
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in infra/.env.prod}
       SCANNER_POLL_INTERVAL_MS: ${SCANNER_POLL_INTERVAL_MS:-15000}
       RATE_LIMIT_CAPACITY: ${RATE_LIMIT_CAPACITY:-10}
@@ -97,12 +117,28 @@ services:
       WORKER_HEALTH_PORT: ${WORKER_HEALTH_PORT:-8081}
       WORKER_STALENESS_MS: ${WORKER_STALENESS_MS:-300000}
     healthcheck:
+      # The fifth argument is the staleness ceiling in ms. It is passed
+      # explicitly instead of relying on the WORKER_STALENESS_MS env fallback,
+      # which only exists because this compose file happens to set it: run the
+      # image under systemd or Kubernetes and the age guard silently vanished.
       test:
-        ["CMD", "node", "/usr/local/bin/health-check.mjs", "http://127.0.0.1:8081/healthz", "ok"]
+        [
+          "CMD",
+          "node",
+          "/usr/local/bin/health-check.mjs",
+          "http://127.0.0.1:8081/healthz",
+          "ok",
+          "${WORKER_STALENESS_MS:-300000}",
+        ]
       interval: 15s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      # Must exceed a real cold start (tsx boot, provider construction, first
+      # scan cycle). Until the first cycle lands, /healthz reports "starting",
+      # which is deliberately not "ok", so a start_period shorter than the boot
+      # time marks a perfectly healthy worker unhealthy — and nothing repairs
+      # it, because `restart: unless-stopped` restarts on exit, not on health.
+      start_period: 120s
     networks:
       - backend
 
@@ -118,17 +154,23 @@ services:
         condition: service_completed_successfully
     environment:
       TZ: UTC
-      PGUSER: ${POSTGRES_USER:?set POSTGRES_USER in infra/.env.prod}
-      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in infra/.env.prod}
-      PGHOST: db
-      PGPORT: 5432
-      PGDATABASE: ${POSTGRES_DB:?set POSTGRES_DB in infra/.env.prod}
+      # The backup target comes from DATABASE_URL, the same variable web/worker/
+      # migrate use. This service previously hardcoded PGHOST=db + PGPORT=5432 +
+      # POSTGRES_* independently, so pointing DATABASE_URL at an external
+      # Postgres produced green, useless backups of the empty local `db` service.
+      # backup.sh fails fast unless the DATABASE_URL host is in
+      # BACKUP_EXPECTED_HOST, so a moved database cannot be backed up silently.
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in infra/.env.prod}
+      BACKUP_EXPECTED_HOST: ${BACKUP_EXPECTED_HOST:-db}
       BACKUP_DIR: /backups
       BACKUP_STATUS_FILE: /backups/status
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
       BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-129600}
       BACKUP_SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
-      BACKUP_REQUIRE_OFFHOST: ${BACKUP_REQUIRE_OFFHOST:-false}
+      BACKUP_REQUIRE_OFFSITE: ${BACKUP_REQUIRE_OFFSITE:-false}
+      # Deprecated spelling, still honoured by backup.sh so an existing
+      # .env.prod that predates the rename keeps enforcing what it asked for.
+      BACKUP_REQUIRE_OFFHOST: ${BACKUP_REQUIRE_OFFHOST:-}
       S3_ENABLED: ${S3_ENABLED:-false}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
       S3_REGION: ${S3_REGION:-us-east-1}

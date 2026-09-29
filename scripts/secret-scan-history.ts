@@ -48,7 +48,8 @@ function parseLimit(argv: string[]): number {
 }
 
 /** Patch headers that are not content and must not advance the new-file line counter. */
-const PATCH_METADATA = /^(?:diff --git |index |old mode |new mode |new file |deleted file |similarity index |rename |copy |Binary files|GIT binary patch)/;
+const PATCH_METADATA =
+  /^(?:diff --git |index |old mode |new mode |new file |deleted file |similarity index |rename |copy |Binary files|GIT binary patch)/;
 
 /**
  * Scan one commit patch line-by-line so every finding carries the file it came

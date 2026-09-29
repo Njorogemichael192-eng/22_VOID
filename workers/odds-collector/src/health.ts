@@ -1,4 +1,5 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 
 import { workerId } from "./identity.js";
 
@@ -168,6 +169,18 @@ export function createWorkerHealthState(options: WorkerHealthStateOptions = {}):
   };
 }
 
+/**
+ * Headers carried by every health response.
+ *
+ * `no-store` matters as much here as it does on the web readiness route: a
+ * cached 200 tells Docker the worker is healthy long after its last cycle went
+ * stale, and the healthcheck is the only thing watching.
+ */
+export const HEALTH_RESPONSE_HEADERS: Readonly<Record<string, string>> = {
+  "content-type": "application/json",
+  "cache-control": "no-store, max-age=0",
+};
+
 export interface HealthRequestOptions {
   readonly state: WorkerHealthState;
   readonly getRunCount: () => number;
@@ -182,7 +195,7 @@ export function createHealthRequestHandler(
       request.method !== "GET" ||
       (path !== "/livez" && path !== "/readyz" && path !== "/healthz")
     ) {
-      response.writeHead(404, { "content-type": "application/json" });
+      response.writeHead(404, HEALTH_RESPONSE_HEADERS);
       response.end(JSON.stringify({ status: "not_found" }));
       return;
     }
@@ -190,7 +203,43 @@ export function createHealthRequestHandler(
     const snapshot = options.state.snapshot(options.getRunCount());
     const body = path === "/livez" ? { ...snapshot, status: "ok" as const } : snapshot;
     const statusCode = path === "/livez" || snapshot.ready ? 200 : 503;
-    response.writeHead(statusCode, { "content-type": "application/json" });
+    response.writeHead(statusCode, HEALTH_RESPONSE_HEADERS);
     response.end(JSON.stringify(body));
   };
+}
+
+export interface HealthServerOptions extends HealthRequestOptions {
+  /** How long a client may take to finish sending its request headers. */
+  readonly headersTimeoutMs?: number;
+  /** How long a client may take to send a complete request. */
+  readonly requestTimeoutMs?: number;
+  /** How long an idle keep-alive connection is held open. */
+  readonly keepAliveTimeoutMs?: number;
+}
+
+/**
+ * Defaults chosen for an endpoint the container healthcheck polls every 15s.
+ *
+ * Node's own defaults are 60s for headers and 300s for a whole request, which
+ * is far too generous here: a client that opens a socket and then stalls holds
+ * a connection for minutes, and enough stalled connections crowd out the
+ * healthcheck — so the one component able to report a wedged worker goes silent
+ * at the same moment the worker does.
+ */
+const DEFAULT_HEADERS_TIMEOUT_MS = 5_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_KEEP_ALIVE_TIMEOUT_MS = 5_000;
+
+/**
+ * The health server with the timeouts already applied.
+ *
+ * Constructed here rather than in `main.ts` so the timeouts are part of what the
+ * tests exercise over a real socket, instead of untested wiring in an entrypoint.
+ */
+export function createHealthServer(options: HealthServerOptions): Server {
+  const server = createServer(createHealthRequestHandler(options));
+  server.headersTimeout = options.headersTimeoutMs ?? DEFAULT_HEADERS_TIMEOUT_MS;
+  server.requestTimeout = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  server.keepAliveTimeout = options.keepAliveTimeoutMs ?? DEFAULT_KEEP_ALIVE_TIMEOUT_MS;
+  return server;
 }

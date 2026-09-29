@@ -2,12 +2,32 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/client/client";
 
 /**
+ * The subset of `pg.PoolConfig` worth exposing to callers that manage their own
+ * pool. Kept narrow on purpose: the application singleton wants libpq/pg
+ * defaults, while a health probe wants a hard ceiling on connections.
+ */
+export interface PrismaPoolOptions {
+  /** Maximum connections the pool may hold open. */
+  max?: number;
+  /** How long to wait for a free connection before failing. */
+  connectionTimeoutMillis?: number;
+  /** Close connections that have been idle this long. */
+  idleTimeoutMillis?: number;
+}
+
+/**
  * Construct an adapter-based Prisma client for the PostgreSQL (Supabase)
  * datasource. Prisma ORM v7 requires a driver adapter; the connection string
  * is taken from DATABASE_URL.
  */
-export function createPrismaClient(connectionString: string): PrismaClient {
-  const adapter = new PrismaPg(connectionString);
+export function createPrismaClient(
+  connectionString: string,
+  pool?: PrismaPoolOptions,
+): PrismaClient {
+  const adapter =
+    pool === undefined
+      ? new PrismaPg(connectionString)
+      : new PrismaPg({ connectionString, ...pool });
   return new PrismaClient({ adapter });
 }
 
