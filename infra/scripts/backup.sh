@@ -60,6 +60,12 @@ fail() {
 
 cleanup() {
   lock_remove
+  # Remove the libpq service and password files. The guard covers the window
+  # before pg_tmp exists, and cleanup is written to be safe to run twice: the
+  # signal traps below call it and then exit, which re-fires the EXIT trap.
+  if [ -n "${pg_tmp:-}" ] && [ -d "$pg_tmp" ]; then
+    rm -rf "$pg_tmp"
+  fi
 }
 
 # --- locking -----------------------------------------------------------------
@@ -347,16 +353,74 @@ expected_host=${BACKUP_EXPECTED_HOST:-db}
 database_url_parse "$database_url" "$expected_host" ||
   fail "$DATABASE_URL_ERROR; set BACKUP_EXPECTED_HOST to acknowledge this target, or the backup would target the wrong database"
 url_host=$DATABASE_URL_HOST
+url_port=${DATABASE_URL_PORT:-5432}
+url_user=$DATABASE_URL_USER
+url_password=$DATABASE_URL_PASSWORD
 database_url_check_identifier "$DATABASE_URL_DATABASE" ||
   fail "DATABASE_URL database name '$DATABASE_URL_DATABASE' is not a usable identifier"
 
-# Hand libpq the URI itself rather than reassembling PG* variables: it decodes
-# percent-escapes, IPv6 and sslmode parameters correctly, which hand-rolled
-# parsing silently gets wrong. Exported through PGDATABASE (not argv) so the
-# credential does not show up in `ps` inside the container.
-unset PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE PGSERVICE PGSERVICEFILE PGREALM 2>/dev/null || true
-PGDATABASE=$database_url
-export PGDATABASE
+# --- libpq connection parameters ---------------------------------------------
+#
+# pg_dump can be handed a connection URI neither safely nor correctly, and both
+# failure modes are load-bearing:
+#
+#   * PGDATABASE is read as a plain database NAME. A URI placed there loses its
+#     host and libpq silently falls back to the local Unix socket. That is the
+#     bug this block replaces: the backup ran to completion against an empty
+#     socket instead of the db service. It is not cosmetic -- on a host where
+#     any local cluster existed, the same code would have dumped the wrong
+#     database without complaint.
+#   * --dbname="$database_url" does work, but it places the password in argv,
+#     where `docker exec`, a debug attach or a crash dump can read it out of
+#     `ps`. A production backup script must not advertise its credential.
+#
+# So libpq gets the pieces instead: a service file carries host/port/user/
+# dbname, a 0600 .pgpass carries the password, and PGDATABASE carries only the
+# database name -- the one value pg_dump does read verbatim. Nothing sensitive
+# reaches argv and the environment holds two file paths.
+#
+# Do NOT "simplify" this back into PGDATABASE=$database_url.
+[ -n "$url_user" ] ||
+  fail 'DATABASE_URL does not contain a user; cannot build a libpq service file'
+[ -n "$url_password" ] ||
+  fail 'DATABASE_URL does not contain a password; cannot write a libpq password file'
+
+pg_tmp=$(mktemp -d) || fail 'could not create a temporary directory for the connection files'
+chmod 700 "$pg_tmp" || fail "could not restrict the permissions on $pg_tmp"
+pg_service=$pg_tmp/pg_service
+pg_pass=$pg_tmp/pgpass
+
+# libpq refuses a .pgpass readable by group or other, and a loose password file
+# is precisely the exposure this design exists to remove. umask 077 at the top
+# of this script already covers creation; the chmod keeps that true if the umask
+# is ever relaxed.
+printf '[void]\nhost=%s\nport=%s\nuser=%s\ndbname=%s\n' \
+  "$url_host" "$url_port" "$url_user" "$DATABASE_URL_DATABASE" > "$pg_service" ||
+  fail 'could not write the libpq service file'
+# .pgpass is colon-separated, so a password containing ':' or '\' has to escape
+# them or the remaining fields shift and the failure looks like bad credentials.
+pg_pass_escaped=$(printf '%s' "$url_password" | sed -e 's/\\/\\\\/g' -e 's/:/\\:/g')
+printf '%s:%s:%s:%s:%s\n' \
+  "$url_host" "$url_port" "$DATABASE_URL_DATABASE" "$url_user" "$pg_pass_escaped" > "$pg_pass" ||
+  fail 'could not write the libpq password file'
+chmod 600 "$pg_service" "$pg_pass" || fail 'could not restrict the permissions on the connection files'
+
+# PGDATABASE is deliberately absent from this unset: it is set to the plain
+# database name below, which is the value pg_dump understands.
+unset PGHOST PGPORT PGUSER PGPASSWORD PGSERVICE PGREALM 2>/dev/null || true
+PGSERVICEFILE=$pg_service
+PGPASSFILE=$pg_pass
+PGDATABASE=$DATABASE_URL_DATABASE
+export PGSERVICEFILE PGPASSFILE PGDATABASE
+
+# Signals as well as normal exit: `docker stop` sends SIGTERM, and a supervisor
+# restart would otherwise leave the credential files behind on the tmpfs. Each
+# handler clears the EXIT trap first, because exiting re-fires it and cleanup is
+# written to tolerate being called twice.
+trap 'trap - 0; cleanup; exit 129' HUP
+trap 'trap - 0; cleanup; exit 130' INT
+trap 'trap - 0; cleanup; exit 143' TERM
+
 printf '[backup] target host=%s db=%s (allowed: %s)\n' \
   "$url_host" "$DATABASE_URL_DATABASE" "$expected_host"
 
