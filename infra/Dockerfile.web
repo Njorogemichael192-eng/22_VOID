@@ -51,6 +51,16 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
+# Prisma's query engine links against OpenSSL, but bookworm-slim ships neither the
+# `openssl` package nor libssl/libcrypto. It works today only because the bundled
+# engine resolves OpenSSL internally; installing it makes Prisma's version
+# detection resolve instead of warn, and keeps the image working if the engine
+# ever links dynamically or the base image moves. Placed before the useradd layer
+# so the dependency is a system concern, not tangled up with account setup.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system --gid 1001 nodejs \
     && useradd --system --uid 1001 --gid nodejs nextjs
 

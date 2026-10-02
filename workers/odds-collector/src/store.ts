@@ -15,6 +15,7 @@
  */
 
 import {
+  completeHeartbeat as dbCompleteHeartbeat,
   computeOpportunityKey,
   ensureOddsSource,
   loadPricedSelections,
@@ -60,6 +61,17 @@ export interface WorkerHeartbeatInput {
   finishedAt?: Date;
 }
 
+/**
+ * The second phase of a heartbeat. There is deliberately no `sourceKey`: the
+ * run row already knows its source and a completion cannot change it.
+ */
+export interface WorkerHeartbeatCompletion {
+  runId: string;
+  status: WorkerSourceStatus;
+  message?: string;
+  finishedAt?: Date;
+}
+
 export interface WorkerStore {
   loadEventSeeds(): Promise<PersistedEventSeed[]>;
   persistRun(input: PersistCanonicalRunInput): Promise<PersistCanonicalRunResult>;
@@ -67,6 +79,11 @@ export interface WorkerStore {
   getSourceStatus(sourceKey: string): Promise<WorkerSourceStatus>;
   markSourceStatus(sourceKey: string, status: WorkerSourceStatus): Promise<void>;
   recordHeartbeat(input: WorkerHeartbeatInput): Promise<void>;
+  /**
+   * Complete the run row that `recordHeartbeat` opened. Two phases, one row:
+   * `scanner_health.runId` is unique, so completion must update, never append.
+   */
+  completeHeartbeat(input: WorkerHeartbeatCompletion): Promise<void>;
   storeRaw(payload: RawProviderPayload): Promise<void>;
   persistOpportunity(input: PersistOpportunityInput): Promise<void>;
   /**
@@ -131,6 +148,15 @@ export function createDbWorkerStore(db: PrismaClient): WorkerStore {
       });
     },
 
+    async completeHeartbeat(input: WorkerHeartbeatCompletion): Promise<void> {
+      await dbCompleteHeartbeat(db, {
+        runId: input.runId,
+        status: input.status,
+        ...(input.message !== undefined ? { message: input.message } : {}),
+        ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+      });
+    },
+
     async storeRaw(payload: RawProviderPayload): Promise<void> {
       const source = await ensureOddsSource(db, payload.provider);
       await storeRawPayload({
@@ -147,7 +173,10 @@ export function createDbWorkerStore(db: PrismaClient): WorkerStore {
       await dbPersistOpportunity(db, input);
     },
 
-    async reconcileOpportunityEpisodes(activeKeys: string[], now: number): Promise<ReconcileCounts> {
+    async reconcileOpportunityEpisodes(
+      activeKeys: string[],
+      now: number
+    ): Promise<ReconcileCounts> {
       return sweepOpportunityEpisodes(db, activeKeys, new Date(now));
     },
   };
@@ -369,7 +398,13 @@ export function createMemoryWorkerStore(providerKeys: string[] = []): MemoryWork
         selectionsCount += 1;
       }
 
-      return { events: eventsCount, markets: marketsCount, selections: selectionsCount, observations, invalid };
+      return {
+        events: eventsCount,
+        markets: marketsCount,
+        selections: selectionsCount,
+        observations,
+        invalid,
+      };
     },
 
     async loadPricedSelections(options?: { eventId?: string }): Promise<DbPricedSelection[]> {
@@ -389,6 +424,23 @@ export function createMemoryWorkerStore(providerKeys: string[] = []): MemoryWork
 
     async recordHeartbeat(input: WorkerHeartbeatInput): Promise<void> {
       heartbeats.push(input);
+    },
+
+    async completeHeartbeat(input: WorkerHeartbeatCompletion): Promise<void> {
+      const existing = heartbeats.find((entry) => entry.runId === input.runId);
+      if (existing === undefined) {
+        // The Prisma adapter fails here with P2025, and the database itself
+        // would reject a second `create` for this runId. This fake used to
+        // append unconditionally, which is exactly how a two-phase write
+        // modelled one way here and another way in the database shipped
+        // unnoticed. It now mirrors the real failure instead.
+        throw new Error(
+          `no in-flight heartbeat for run ${input.runId}; refusing to fabricate a completed run`
+        );
+      }
+      existing.status = input.status;
+      if (input.message !== undefined) existing.message = input.message;
+      if (input.finishedAt !== undefined) existing.finishedAt = input.finishedAt;
     },
 
     async storeRaw(payload: RawProviderPayload): Promise<void> {
@@ -436,7 +488,10 @@ export function createMemoryWorkerStore(providerKeys: string[] = []): MemoryWork
       opportunities.push(input);
     },
 
-    async reconcileOpportunityEpisodes(activeKeys: string[], now: number): Promise<ReconcileCounts> {
+    async reconcileOpportunityEpisodes(
+      activeKeys: string[],
+      now: number
+    ): Promise<ReconcileCounts> {
       const active = new Set(activeKeys);
       let disappeared = 0;
       let restored = 0;

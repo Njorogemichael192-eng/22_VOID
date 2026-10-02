@@ -389,13 +389,17 @@ pg_tmp=$(mktemp -d) || fail 'could not create a temporary directory for the conn
 chmod 700 "$pg_tmp" || fail "could not restrict the permissions on $pg_tmp"
 pg_service=$pg_tmp/pg_service
 pg_pass=$pg_tmp/pgpass
+# One name, used both as the service-file section header and as the value of
+# PGSERVICE below. They are two separate libpq mechanisms that must agree, and
+# the first version of this block set only one of them.
+pg_service_name=void
 
 # libpq refuses a .pgpass readable by group or other, and a loose password file
 # is precisely the exposure this design exists to remove. umask 077 at the top
 # of this script already covers creation; the chmod keeps that true if the umask
 # is ever relaxed.
-printf '[void]\nhost=%s\nport=%s\nuser=%s\ndbname=%s\n' \
-  "$url_host" "$url_port" "$url_user" "$DATABASE_URL_DATABASE" > "$pg_service" ||
+printf '[%s]\nhost=%s\nport=%s\nuser=%s\ndbname=%s\n' \
+  "$pg_service_name" "$url_host" "$url_port" "$url_user" "$DATABASE_URL_DATABASE" > "$pg_service" ||
   fail 'could not write the libpq service file'
 # .pgpass is colon-separated, so a password containing ':' or '\' has to escape
 # them or the remaining fields shift and the failure looks like bad credentials.
@@ -407,11 +411,17 @@ chmod 600 "$pg_service" "$pg_pass" || fail 'could not restrict the permissions o
 
 # PGDATABASE is deliberately absent from this unset: it is set to the plain
 # database name below, which is the value pg_dump understands.
+#
+# PGSERVICEFILE and PGSERVICE are not interchangeable. The first says where the
+# service definitions live; the second selects which one to use. Setting only
+# the first makes libpq read the file, apply nothing, and fall back to the local
+# socket -- reintroducing exactly the failure this block exists to prevent.
 unset PGHOST PGPORT PGUSER PGPASSWORD PGSERVICE PGREALM 2>/dev/null || true
 PGSERVICEFILE=$pg_service
+PGSERVICE=$pg_service_name
 PGPASSFILE=$pg_pass
 PGDATABASE=$DATABASE_URL_DATABASE
-export PGSERVICEFILE PGPASSFILE PGDATABASE
+export PGSERVICEFILE PGSERVICE PGPASSFILE PGDATABASE
 
 # Signals as well as normal exit: `docker stop` sends SIGTERM, and a supervisor
 # restart would otherwise leave the credential files behind on the tmpfs. Each

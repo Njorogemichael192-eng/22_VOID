@@ -30,7 +30,11 @@ import type {
   SourceStatus,
 } from "./generated/client/client";
 import { SelectionOutcomeType as SelectionOutcomeEnum } from "./generated/client/client";
-import { computeOpportunityKey, legKeyFromSelectionIds, upsertOpportunityEpisodeTx } from "./history";
+import {
+  computeOpportunityKey,
+  legKeyFromSelectionIds,
+  upsertOpportunityEpisodeTx,
+} from "./history";
 import { ensureOddsSource } from "./raw-payloads";
 
 export type DbClient = PrismaClient;
@@ -121,7 +125,9 @@ const SELECTION_OUTCOME_VALUES = new Set<string>(Object.values(SelectionOutcomeE
 export function toSelectionOutcomeType(
   outcome: string
 ): (typeof SelectionOutcomeEnum)[keyof typeof SelectionOutcomeEnum] | null {
-  return SELECTION_OUTCOME_VALUES.has(outcome) ? (outcome as (typeof SelectionOutcomeEnum)[keyof typeof SelectionOutcomeEnum]) : null;
+  return SELECTION_OUTCOME_VALUES.has(outcome)
+    ? (outcome as (typeof SelectionOutcomeEnum)[keyof typeof SelectionOutcomeEnum])
+    : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,17 +320,31 @@ export async function persistCanonicalRun(
     for (const market of input.markets) {
       const eventId = eventByCanonicalId.get(market.eventCanonicalId);
       if (eventId === undefined) {
-        invalid.push({ ref: market.sourceMarketId, reason: `unknown event ${market.eventCanonicalId}` });
+        invalid.push({
+          ref: market.sourceMarketId,
+          reason: `unknown event ${market.eventCanonicalId}`,
+        });
         continue;
       }
       const ruleKey = `${market.family}|${market.marketType}`;
       let ruleId = ruleByKey.get(ruleKey);
       if (ruleId === undefined) {
-        ruleId = await ensureSettlementRule(tx, source.id, market.family, market.marketType, source.key);
+        ruleId = await ensureSettlementRule(
+          tx,
+          source.id,
+          market.family,
+          market.marketType,
+          source.key
+        );
         ruleByKey.set(ruleKey, ruleId);
       }
       const existing = await tx.market.findUnique({
-        where: { oddsSourceId_sourceMarketId: { oddsSourceId: source.id, sourceMarketId: market.sourceMarketId } },
+        where: {
+          oddsSourceId_sourceMarketId: {
+            oddsSourceId: source.id,
+            sourceMarketId: market.sourceMarketId,
+          },
+        },
       });
       const data = {
         eventId,
@@ -352,7 +372,10 @@ export async function persistCanonicalRun(
     for (const selection of input.selections) {
       const market = marketBySourceKey.get(selection.sourceMarketId);
       if (market === undefined) {
-        invalid.push({ ref: selection.bookmaker, reason: `unknown market ${selection.sourceMarketId}` });
+        invalid.push({
+          ref: selection.bookmaker,
+          reason: `unknown market ${selection.sourceMarketId}`,
+        });
         continue;
       }
       const result = await upsertSelection(tx, selection, market);
@@ -456,7 +479,9 @@ export async function loadPricedSelections(
       odds: Number(row.odds),
       bookmaker: row.bookmaker.name,
       observedAt: row.observedAt.getTime(),
-      ...(row.sourceUpdatedAt !== null ? { sourceUpdatedAt: row.sourceUpdatedAt.toISOString() } : {}),
+      ...(row.sourceUpdatedAt !== null
+        ? { sourceUpdatedAt: row.sourceUpdatedAt.toISOString() }
+        : {}),
       provider: row.market.oddsSource.key,
       sourceStatus: mapSourceStatus(row.market.oddsSource.status),
       ...(hasConfidence ? { eventConfidence: Math.min(...confidences) } : {}),
@@ -528,6 +553,52 @@ export async function recordHeartbeat(
   };
 }
 
+export interface CompleteHeartbeatInput {
+  runId: string;
+  status: SourceStatus;
+  message?: string;
+  finishedAt?: Date;
+}
+
+/**
+ * Complete the in-flight heartbeat row for a run.
+ *
+ * `recordHeartbeat` writes the row when a cycle starts; this records how that
+ * cycle ended. Two phases, one row, matched on the unique runId.
+ *
+ * The read model depends on that one-row-per-run shape: `listScannerRuns` maps
+ * a single row to a single `ScannerRunView` carrying both timestamps,
+ * `_count.scannerChecks` is reported as a run count, and `sourceLatencyStats`
+ * aggregates many runs per source. Appending a second row per transition would
+ * duplicate every run; upserting per source would erase the history.
+ *
+ * Deliberately an `update` and not an `upsert`. The start row is written
+ * moments earlier in the same cycle, so a missing row means it was deleted or
+ * the database is not what we think it is, and Prisma's P2025 is the right
+ * answer to that. Recreating it would fabricate a run that never started.
+ */
+export async function completeHeartbeat(
+  db: DbClient,
+  input: CompleteHeartbeatInput
+): Promise<HeartbeatRow> {
+  const row = await db.scannerHealth.update({
+    where: { runId: input.runId },
+    data: {
+      status: input.status,
+      ...(input.message !== undefined ? { message: input.message } : {}),
+      ...(input.finishedAt !== undefined ? { finishedAt: input.finishedAt } : {}),
+    },
+  });
+  return {
+    id: row.id,
+    runId: row.runId,
+    status: row.status,
+    message: row.message,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+  };
+}
+
 export interface PersistOpportunityLegInput {
   selectionId: string;
   oddsSnapshot: number;
@@ -580,7 +651,7 @@ export interface PersistOpportunityInput {
  */
 export async function persistOpportunity(
   db: DbClient,
-  input: PersistOpportunityInput,
+  input: PersistOpportunityInput
 ): Promise<Opportunity> {
   const event = await db.event.findUnique({
     where: { canonicalEventId: input.eventCanonicalId },
@@ -625,13 +696,21 @@ export async function persistOpportunity(
         ...(input.marketStructure !== undefined ? { marketStructure: input.marketStructure } : {}),
         ...(input.totalStake !== undefined ? { totalStake: input.totalStake } : {}),
         ...(input.minReturn !== undefined ? { minReturn: input.minReturn } : {}),
-        ...(input.guaranteedProfit !== undefined ? { guaranteedProfit: input.guaranteedProfit } : {}),
+        ...(input.guaranteedProfit !== undefined
+          ? { guaranteedProfit: input.guaranteedProfit }
+          : {}),
         ...(input.roi !== undefined ? { roi: input.roi } : {}),
         ...(input.worstState !== undefined ? { worstState: input.worstState } : {}),
         engineVersion: input.engineVersion,
-        ...(input.normalizerVersion !== undefined ? { normalizerVersion: input.normalizerVersion } : {}),
-        ...(input.settlementVersion !== undefined ? { settlementVersion: input.settlementVersion } : {}),
-        ...(input.optimizerVersion !== undefined ? { optimizerVersion: input.optimizerVersion } : {}),
+        ...(input.normalizerVersion !== undefined
+          ? { normalizerVersion: input.normalizerVersion }
+          : {}),
+        ...(input.settlementVersion !== undefined
+          ? { settlementVersion: input.settlementVersion }
+          : {}),
+        ...(input.optimizerVersion !== undefined
+          ? { optimizerVersion: input.optimizerVersion }
+          : {}),
         detectedAt,
         ...(input.validatedAt !== undefined ? { validatedAt: new Date(input.validatedAt) } : {}),
         ...(input.expiresAt !== undefined ? { expiresAt: new Date(input.expiresAt) } : {}),
@@ -640,7 +719,9 @@ export async function persistOpportunity(
             selection: { connect: { id: leg.selectionId } },
             oddsSnapshot: leg.oddsSnapshot,
             ...(leg.stake !== undefined ? { stake: leg.stake } : {}),
-            ...(leg.guaranteedReturn !== undefined ? { guaranteedReturn: leg.guaranteedReturn } : {}),
+            ...(leg.guaranteedReturn !== undefined
+              ? { guaranteedReturn: leg.guaranteedReturn }
+              : {}),
           })),
         },
         auditLogs: {

@@ -5,28 +5,28 @@ Production deployment for the 22_VOID stack: **web** (Next.js standalone), **wor
 **production smoke test** for verification. The stack itself runs entirely in
 Docker, but the smoke test is **not** containerised: `npm run smoke:prod` runs
 `scripts/smoke-prod.ts` through `tsx` on whatever machine invokes it, pointed at
-the deployed URL. So the *target* host needs Node 22 + npm (or a checkout of the
+the deployed URL. So the _target_ host needs Node 22 + npm (or a checkout of the
 repo from which to run it) if you want to verify the stack in place; only
-Docker is required to *run* the stack.
+Docker is required to _run_ the stack.
 
 Reference architecture: `docs/ARCHITECTURE.md`. Plans live in `PROJECT_STATE.md`
-(Phase 18 checklist + acceptance: *production health checks green*).
+(Phase 18 checklist + acceptance: _production health checks green_).
 
 ---
 
 ## 1. Checklist at a glance
 
-| Phase 18 item | Delivered by | Verified how |
-| --- | --- | --- |
-| Web deployment | `infra/Dockerfile.web` + `web` service | smoke: `/api/v1/health`, 200 ok |
-| Database | `db` service (`postgres:16`) + one-shot `migrate` service (`infra/scripts/migrate.sh`) | `pg_isready` healthcheck |
-| Worker | `infra/Dockerfile.worker` + `worker` service | `/healthz`, `docker compose ps` |
-| Secrets | `infra/env.prod.example` → `infra/.env.prod` (gitignored) | `security:scan` + secret-scan ci |
-| Scheduler | worker `SCANNER_POLL_INTERVAL_MS` loop + backup cron sidecar | scanner freshness check |
-| Monitoring | `/api/v1/health`, `/api/v1/scanner`, worker `/healthz`, compose healthchecks | `smoke:prod` |
-| Backups | `backup` sidecar (`pg_dump` + retention + `status` file) | `restore.sh` docs |
-| Domain | `infra/Caddyfile` + `compose.proxy.yml` (Let's Encrypt) | browse `https://DOMAIN` |
-| Production smoke test | `scripts/smoke-prod.ts` (`npm run smoke:prod`) | exit code 0 |
+| Phase 18 item         | Delivered by                                                                           | Verified how                     |
+| --------------------- | -------------------------------------------------------------------------------------- | -------------------------------- |
+| Web deployment        | `infra/Dockerfile.web` + `web` service                                                 | smoke: `/api/v1/health`, 200 ok  |
+| Database              | `db` service (`postgres:16`) + one-shot `migrate` service (`infra/scripts/migrate.sh`) | `pg_isready` healthcheck         |
+| Worker                | `infra/Dockerfile.worker` + `worker` service                                           | `/healthz`, `docker compose ps`  |
+| Secrets               | `infra/env.prod.example` → `infra/.env.prod` (gitignored)                              | `security:scan` + secret-scan ci |
+| Scheduler             | worker `SCANNER_POLL_INTERVAL_MS` loop + backup cron sidecar                           | scanner freshness check          |
+| Monitoring            | `/api/v1/health`, `/api/v1/scanner`, worker `/healthz`, compose healthchecks           | `smoke:prod`                     |
+| Backups               | `backup` sidecar (`pg_dump` + retention + `status` file)                               | `restore.sh` docs                |
+| Domain                | `infra/Caddyfile` + `compose.proxy.yml` (Let's Encrypt)                                | browse `https://DOMAIN`          |
+| Production smoke test | `scripts/smoke-prod.ts` (`npm run smoke:prod`)                                         | exit code 0                      |
 
 ---
 
@@ -89,27 +89,27 @@ docker compose --env-file infra/.env.prod -f infra/compose.prod.yml run --rm mig
 
 ### Environment variables (shared `infra/.env.prod`)
 
-| Variable | Applies to | Required | Notes |
-| --- | --- | --- | --- |
-| `POSTGRES_USER/PASSWORD/DB` | db | yes | create the role+database |
-| `DATABASE_URL` | web, worker | yes | `postgresql://u:p@db:5432/db` |
-| `DASHBOARD_SOURCE` | web | yes (`db`) | the entrypoint validator fails startup unless it is exactly `db`; `demo` serves the fixture repo (e2e/smoke only) |
-| `API_KEY`, `ADMIN_API_KEY` | web | yes | sent as the `x-api-key` header, **not** `Authorization: Bearer`; missing → API fails closed 401 |
-| `WORKER_PROVIDER` | worker | `odds-api` | required in production; `mock` is **refused** (see below) |
-| `ALLOW_MOCK_PROVIDER_IN_PRODUCTION` | worker | unset | demo escape hatch for the refusal; leave empty on a real stack |
-| `ODDS_API_KEY`, `ODDS_API_BASE_URL` | worker | for live provider | required when `WORKER_PROVIDER=odds-api`; the base URL **must be `https://`** |
-| `ODDS_API_AUTH_IN_QUERY` | worker | unset | escape hatch that sends the key as `?apiKey=`; leave empty (see below) |
-| `SCANNER_POLL_INTERVAL_MS` | worker | default 15000 | cycle length (the "scheduler") |
-| `API_RATE_LIMIT_CAPACITY` / `API_RATE_LIMIT_REFILL_PER_SECOND` | web | 120 / 2 | the public API's per-caller token bucket (429 + `Retry-After`) |
-| `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND` | worker | 10 / 5 | token bucket for the worker's outbound provider calls |
-| `BACKUP_RETENTION_DAYS`, `BACKUP_SCHEDULE` | backup | default 14 / `0 2 * * *` | cron (UTC) |
-| `BACKUP_REQUIRE_OFFSITE` | backup | **`true`** in `env.prod.example` | refuses to start without a usable offsite destination |
-| `BACKUP_EXPECTED_HOST` | backup | `db` | `DATABASE_URL` host must match, or the run aborts |
-| `BACKUP_WATCHDOG_INTERVAL_SECONDS` | backup | 60 | self-supervision probe interval |
-| `BACKUP_WATCHDOG_MAX_FAILURES` | backup | 3 | consecutive probe failures before a restart |
-| `BACKUP_WATCHDOG_STALE_SECONDS` | backup | `BACKUP_MAX_AGE_SECONDS` | "no run of any outcome for this long" = wedged |
-| `BACKUP_WATCHDOG_ENABLED` | backup | `true` | `false` puts `crond` back at PID 1, no self-healing |
-| `DOMAIN`, `ACME_EMAIL` | caddy | **yes** | no plain-HTTP fallback exists; see below |
+| Variable                                                       | Applies to  | Required                         | Notes                                                                                                             |
+| -------------------------------------------------------------- | ----------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_USER/PASSWORD/DB`                                    | db          | yes                              | create the role+database                                                                                          |
+| `DATABASE_URL`                                                 | web, worker | yes                              | `postgresql://u:p@db:5432/db`                                                                                     |
+| `DASHBOARD_SOURCE`                                             | web         | yes (`db`)                       | the entrypoint validator fails startup unless it is exactly `db`; `demo` serves the fixture repo (e2e/smoke only) |
+| `API_KEY`, `ADMIN_API_KEY`                                     | web         | yes                              | sent as the `x-api-key` header, **not** `Authorization: Bearer`; missing → API fails closed 401                   |
+| `WORKER_PROVIDER`                                              | worker      | `odds-api`                       | required in production; `mock` is **refused** (see below)                                                         |
+| `ALLOW_MOCK_PROVIDER_IN_PRODUCTION`                            | worker      | unset                            | demo escape hatch for the refusal; leave empty on a real stack                                                    |
+| `ODDS_API_KEY`, `ODDS_API_BASE_URL`                            | worker      | for live provider                | required when `WORKER_PROVIDER=odds-api`; the base URL **must be `https://`**                                     |
+| `ODDS_API_AUTH_IN_QUERY`                                       | worker      | unset                            | escape hatch that sends the key as `?apiKey=`; leave empty (see below)                                            |
+| `SCANNER_POLL_INTERVAL_MS`                                     | worker      | default 15000                    | cycle length (the "scheduler")                                                                                    |
+| `API_RATE_LIMIT_CAPACITY` / `API_RATE_LIMIT_REFILL_PER_SECOND` | web         | 120 / 2                          | the public API's per-caller token bucket (429 + `Retry-After`)                                                    |
+| `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND`         | worker      | 10 / 5                           | token bucket for the worker's outbound provider calls                                                             |
+| `BACKUP_RETENTION_DAYS`, `BACKUP_SCHEDULE`                     | backup      | default 14 / `0 2 * * *`         | cron (UTC)                                                                                                        |
+| `BACKUP_REQUIRE_OFFSITE`                                       | backup      | **`true`** in `env.prod.example` | refuses to start without a usable offsite destination                                                             |
+| `BACKUP_EXPECTED_HOST`                                         | backup      | `db`                             | `DATABASE_URL` host must match, or the run aborts                                                                 |
+| `BACKUP_WATCHDOG_INTERVAL_SECONDS`                             | backup      | 60                               | self-supervision probe interval                                                                                   |
+| `BACKUP_WATCHDOG_MAX_FAILURES`                                 | backup      | 3                                | consecutive probe failures before a restart                                                                       |
+| `BACKUP_WATCHDOG_STALE_SECONDS`                                | backup      | `BACKUP_MAX_AGE_SECONDS`         | "no run of any outcome for this long" = wedged                                                                    |
+| `BACKUP_WATCHDOG_ENABLED`                                      | backup      | `true`                           | `false` puts `crond` back at PID 1, no self-healing                                                               |
+| `DOMAIN`, `ACME_EMAIL`                                         | caddy       | **yes**                          | no plain-HTTP fallback exists; see below                                                                          |
 
 #### `DOMAIN` and `ACME_EMAIL` are mandatory
 
@@ -202,11 +202,11 @@ the `API_RATE_LIMIT_*` pair was missing from the web service entirely, so the on
 limiter facing the internet ran on the in-code 120/2 default while an operator
 tuned `RATE_LIMIT_CAPACITY` and saw the worker's provider polling change instead.
 
-| | `API_RATE_LIMIT_*` (web) | `RATE_LIMIT_*` (worker) |
-| --- | --- | --- |
-| Guards | inbound API requests from callers | outbound calls to the odds provider |
-| On breach | HTTP 429 + `Retry-After` | the cycle waits for a token |
-| Configured in | `web.environment` | `worker.environment` |
+|               | `API_RATE_LIMIT_*` (web)          | `RATE_LIMIT_*` (worker)             |
+| ------------- | --------------------------------- | ----------------------------------- |
+| Guards        | inbound API requests from callers | outbound calls to the odds provider |
+| On breach     | HTTP 429 + `Retry-After`          | the cycle waits for a token         |
+| Configured in | `web.environment`                 | `worker.environment`                |
 
 Three operational notes:
 
@@ -248,13 +248,13 @@ rather than shipping.
 
 ### Health endpoints (monitoring)
 
-| Endpoint | Auth | Meaning |
-| --- | --- | --- |
-| `GET /api/v1/health` | none | liveness; `{"status":"ok"}` |
-| `GET /api/v1/ready` | internal callers only | readiness; `200` only when `SELECT 1` against Postgres succeeds within 2s, else `503`. Caddy's active health check calls this every 30s, so it must stay reachable from the proxy — see the note below. |
-| `GET /api/v1/scanner` | `x-api-key: $API_KEY` | scanner run history + `overall.freshness` (stale > 5 min) |
-| `GET /api/v1/providers` | `x-api-key: $API_KEY` | per-source ingestion status |
-| worker `GET /healthz` (`WORKER_HEALTH_PORT`, default 8081) | none | worker liveness, `lastCycleAt`, `lastCycleStatus`, `runCount` |
+| Endpoint                                                   | Auth                  | Meaning                                                                                                                                                                                                 |
+| ---------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/health`                                       | none                  | liveness; `{"status":"ok"}`                                                                                                                                                                             |
+| `GET /api/v1/ready`                                        | internal callers only | readiness; `200` only when `SELECT 1` against Postgres succeeds within 2s, else `503`. Caddy's active health check calls this every 30s, so it must stay reachable from the proxy — see the note below. |
+| `GET /api/v1/scanner`                                      | `x-api-key: $API_KEY` | scanner run history + `overall.freshness` (stale > 5 min)                                                                                                                                               |
+| `GET /api/v1/providers`                                    | `x-api-key: $API_KEY` | per-source ingestion status                                                                                                                                                                             |
+| worker `GET /healthz` (`WORKER_HEALTH_PORT`, default 8081) | none                  | worker liveness, `lastCycleAt`, `lastCycleStatus`, `runCount`                                                                                                                                           |
 
 #### Why `/api/v1/ready` is restricted
 
@@ -283,19 +283,19 @@ compose file does not publish it): `/livez` (process is up), `/readyz`, and
 `/healthz`. The healthcheck calls `/healthz` and requires `status: "ok"`, so the
 status ladder matters:
 
-| `status` | HTTP | Meaning |
-| --- | --- | --- |
-| `starting` | 200 during grace, 503 after | no cycle has landed yet; `ready` is true only inside `WORKER_STARTUP_GRACE_MS` (30s) |
-| `ok` | 200 | last cycle reported OK and is younger than `WORKER_STALENESS_MS` (5 min) |
-| `degraded` / `down` / `error` | 503 | the last cycle said so |
-| `stale` | 503 | the last cycle is older than `WORKER_STALENESS_MS` — the wedge detector |
+| `status`                      | HTTP                        | Meaning                                                                              |
+| ----------------------------- | --------------------------- | ------------------------------------------------------------------------------------ |
+| `starting`                    | 200 during grace, 503 after | no cycle has landed yet; `ready` is true only inside `WORKER_STARTUP_GRACE_MS` (30s) |
+| `ok`                          | 200                         | last cycle reported OK and is younger than `WORKER_STALENESS_MS` (5 min)             |
+| `degraded` / `down` / `error` | 503                         | the last cycle said so                                                               |
+| `stale`                       | 503                         | the last cycle is older than `WORKER_STALENESS_MS` — the wedge detector              |
 
 Two consequences worth knowing before you touch the healthcheck:
 
 - **`start_period` must exceed a real cold start** (120s here). Until the first
   cycle lands the status is `starting`, not `ok`, so a shorter window marks a
   healthy worker unhealthy — and nothing repairs it, because
-  `restart: unless-stopped` restarts on *exit*, not on health. Treat an
+  `restart: unless-stopped` restarts on _exit_, not on health. Treat an
   unhealthy worker as an alarm to investigate, not a self-healing condition; the
   backup sidecar is the piece that restarts itself.
 - **The staleness ceiling is passed as the healthcheck's fifth argument**, not
@@ -320,7 +320,7 @@ cached 200 — cannot keep reporting a wedged worker as healthy.
   (default 60), exiting non-zero after `BACKUP_WATCHDOG_MAX_FAILURES` (default 3)
   consecutive failures so `restart: unless-stopped` actually engages. It exits
   only when the container is genuinely **wedged**, meaning `crond` has died or no
-  backup of *any* outcome has run for `BACKUP_WATCHDOG_STALE_SECONDS` (defaults to
+  backup of _any_ outcome has run for `BACKUP_WATCHDOG_STALE_SECONDS` (defaults to
   `BACKUP_MAX_AGE_SECONDS`).
 
   It deliberately does **not** restart on a recent failed run. A `FAILED` status
@@ -339,7 +339,7 @@ cached 200 — cannot keep reporting a wedged worker as healthy.
 - **Container healthchecks** (compose): `db` → `pg_isready`; `web` → fetches
   `/api/v1/health`; `worker` → fetches `/healthz`; `backup` → `backup-health.sh`
   (last run OK, within `BACKUP_MAX_AGE_SECONDS`, target still reachable).
-  **`restart: unless-stopped` does *not* recycle an unhealthy container** — it
+  **`restart: unless-stopped` does _not_ recycle an unhealthy container** — it
   only acts when the main process exits, and a healthcheck result is just a
   status bit. A sidecar whose `crond` had died therefore stayed `running` +
   `unhealthy` indefinitely, producing no backups while `docker compose ps` still
@@ -352,11 +352,11 @@ cached 200 — cannot keep reporting a wedged worker as healthy.
   the app flags runs older than 5 minutes as `stale`. Alert when `overall.stale`
   is non-null (worker down, provider failing, or scheduler stalled).
 - **Backup liveness**: `docker compose --env-file infra/.env.prod -f
-  infra/compose.prod.yml exec backup cat /backups/status` shows the
+infra/compose.prod.yml exec backup cat /backups/status` shows the
   last dump (`OK <timestamp>` = green, `FAILED ...` = alert). Send that file's
   mtime/content to your monitor out of band.
 - **Logs**: `docker compose --env-file infra/.env.prod -f infra/compose.prod.yml
-  logs -f --tail=200 web` / `worker`; worker cycles
+logs -f --tail=200 web` / `worker`; worker cycles
   log a one-line summary (`[odds-collector] ok …`).
 
 ---
@@ -511,7 +511,7 @@ rm purge-rules.txt
 Guidance:
 
 - **Do not** use `git filter-repo --path <file> --invert-paths` on a file that
-  merely *contains* a secret. That deletes every revision of the file and all of
+  merely _contains_ a secret. That deletes every revision of the file and all of
   its history. Use `--replace-text` to redact in place.
 - **Commit before purging.** `filter-repo` resets the working tree, so uncommitted
   work is lost.

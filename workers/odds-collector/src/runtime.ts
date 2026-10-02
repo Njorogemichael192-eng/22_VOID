@@ -13,13 +13,15 @@
 
 import { newRequestId } from "@22void/provider-contracts";
 import { envelopeToCanonicalRecords } from "@22void/provider-contracts";
-import type { OddsProvider, PollRequest, PollResult, ProviderKey } from "@22void/provider-contracts";
+import type {
+  OddsProvider,
+  PollRequest,
+  PollResult,
+  ProviderKey,
+} from "@22void/provider-contracts";
 
 import { runDetection, type DetectionSummary } from "./detect.js";
-import {
-  reconcileOpportunityEpisodes,
-  type ReconcileSummary,
-} from "./history.js";
+import { reconcileOpportunityEpisodes, type ReconcileSummary } from "./history.js";
 import { workerId } from "./identity.js";
 import { normalizeRun, type NormalizeRunOutput } from "./normalize.js";
 import { defaultRetryPolicy, type RetryPolicy, withRetry } from "./retry.js";
@@ -84,14 +86,11 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
   let pollResult: PollResult | undefined;
   let lastError: unknown;
   try {
-    pollResult = await withRetry(
-      async () => {
-        attempts += 1;
-        if (deps.rateLimiter !== undefined) await deps.rateLimiter.acquire();
-        return deps.provider.poll(deps.pollRequest);
-      },
-      deps.retryPolicy ?? defaultRetryPolicy()
-    );
+    pollResult = await withRetry(async () => {
+      attempts += 1;
+      if (deps.rateLimiter !== undefined) await deps.rateLimiter.acquire();
+      return deps.provider.poll(deps.pollRequest);
+    }, deps.retryPolicy ?? defaultRetryPolicy());
   } catch (error) {
     lastError = error;
   }
@@ -100,7 +99,7 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
   if (pollResult === undefined) {
     const message = `poll failed after ${attempts} attempt(s): ${errorMessage(lastError)}`;
     await deps.store.markSourceStatus(sourceKey, "DOWN");
-    await deps.store.recordHeartbeat({ runId, sourceKey, status: "DOWN", message, finishedAt });
+    await deps.store.completeHeartbeat({ runId, status: "DOWN", message, finishedAt });
     return {
       runId,
       worker,
@@ -124,7 +123,9 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
     const seeds = await deps.store.loadEventSeeds();
     const normalized = normalizeRun(sourceKey, records, seeds);
     const persist = await deps.store.persistRun(normalized.persist);
-    const detection = await runDetection(deps.store, { now: Date.parse(pollResult.envelope.receivedAt) });
+    const detection = await runDetection(deps.store, {
+      now: Date.parse(pollResult.envelope.receivedAt),
+    });
     const history = await reconcileOpportunityEpisodes(deps.store, detection, {
       now: Date.parse(pollResult.envelope.receivedAt),
     });
@@ -136,10 +137,15 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
         confidence: entry.confidence,
       })),
       persist,
-      detection: { priced: detection.priced, scans: detection.scans, arbs: detection.arbs, opportunities: detection.opportunities },
+      detection: {
+        priced: detection.priced,
+        scans: detection.scans,
+        arbs: detection.arbs,
+        opportunities: detection.opportunities,
+      },
       history,
     });
-    await deps.store.recordHeartbeat({ runId, sourceKey, status: "HEALTHY", message, finishedAt });
+    await deps.store.completeHeartbeat({ runId, status: "HEALTHY", message, finishedAt });
 
     return {
       runId,
@@ -169,7 +175,7 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
   } catch (error) {
     const message = `processing failed after poll: ${errorMessage(error)}`;
     await deps.store.markSourceStatus(sourceKey, "DEGRADED");
-    await deps.store.recordHeartbeat({ runId, sourceKey, status: "DEGRADED", message, finishedAt });
+    await deps.store.completeHeartbeat({ runId, status: "DEGRADED", message, finishedAt });
     return {
       runId,
       worker,
@@ -198,13 +204,21 @@ export interface ScanScheduler {
   schedule(fn: () => void, ms: number): ScheduleHandle;
 }
 
-/** Native setInterval-based scheduler (timer is unref'd so exit stays clean). */
+/**
+ * Native one-shot timer scheduler (timer is unref'd so exit stays clean).
+ *
+ * This must stay a one-shot `setTimeout`. The worker reschedules itself after
+ * every completed cycle, so an interval-based primitive both re-fires on its own
+ * and adds a fresh handle each time: live timers accumulate without bound and
+ * the cycle rate compounds. That defect drove the worker to thousands of cycles
+ * per minute, which starved the DB pool and filled `scanner_health` with orphans.
+ */
 export function nativeScheduler(): ScanScheduler {
   return {
     schedule(fn, ms) {
-      const handle = setInterval(fn, ms);
+      const handle = setTimeout(fn, ms);
       handle.unref?.();
-      return { cancel: () => clearInterval(handle) };
+      return { cancel: () => clearTimeout(handle) };
     },
   };
 }
@@ -226,7 +240,12 @@ export interface ScanWorker {
   stop(): Promise<void>;
 }
 
-/** Long-lived scheduler that runs scan cycles back-to-back, non-overlapping. */
+/**
+ * Long-lived scheduler that runs at most one scan cycle per interval, never
+ * overlapping. Exactly one timer is live at a time and it is armed only once a
+ * cycle has completed, so a slow cycle cannot be joined by a second one and
+ * cannot accumulate timers.
+ */
 export function createScanWorker(options: ScanWorkerOptions): ScanWorker {
   const intervalMs = options.intervalMs;
   const scheduler = options.schedule ?? nativeScheduler();
@@ -239,16 +258,33 @@ export function createScanWorker(options: ScanWorkerOptions): ScanWorker {
   let inFlight: Promise<void> | null = null;
   let runs = 0;
 
-  const runOnce = async (): Promise<void> => {
-    if (cancelled) return;
-    runs += 1;
+  const runCycle = async (): Promise<void> => {
     try {
       const result = await runScanCycle(options.deps);
       options.onRun?.(result);
     } catch (error) {
       if (stopOnError) cancelled = true;
       options.onRun?.(null, error);
+    }
+  };
+
+  const runOnce = async (): Promise<void> => {
+    if (cancelled) return;
+
+    // Overlap guard. A tick that lands while a cycle is still running is dropped
+    // rather than acted on, and deliberately does not arm a replacement timer:
+    // the in-flight cycle arms the next one when it completes. Concurrent cycles
+    // contend for the same connection pool, and arming here is what let timers
+    // compound. Keeping the count at one live timer and one in-flight cycle is
+    // what makes the interval a floor on the cycle rate rather than a target.
+    if (inFlight !== null) return;
+
+    runs += 1;
+    inFlight = runCycle();
+    try {
+      await inFlight;
     } finally {
+      inFlight = null;
       if (!cancelled) timer = scheduler.schedule(() => void runOnce(), intervalMs);
     }
   };
@@ -267,7 +303,9 @@ export function createScanWorker(options: ScanWorkerOptions): ScanWorker {
       if (startedAt !== null) return;
       startedAt = Date.now();
       if (immediate) {
-        inFlight = runOnce();
+        // runOnce owns `inFlight` for every cycle, not just the first one, so that
+        // stop() waits on whichever cycle is actually running.
+        void runOnce();
       } else {
         timer = scheduler.schedule(() => void runOnce(), intervalMs);
       }
