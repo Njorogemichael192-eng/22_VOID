@@ -100,7 +100,8 @@ export function buildRegressionBatch(options: BatchOptions): BatchLeg[] {
     const bookmaker = (index: number): string => BOOKS[index % BOOKS.length]!;
 
     // Overround for ordinary events; sector the arb events to underround.
-    const forceArb = options.arbEveryN !== undefined && options.arbEveryN > 0 && event % options.arbEveryN === 0;
+    const forceArb =
+      options.arbEveryN !== undefined && options.arbEveryN > 0 && event % options.arbEveryN === 0;
     const overround = forceArb ? 0.975 : 1.07 + random() * 0.035;
 
     const twoWay = (
@@ -116,11 +117,15 @@ export function buildRegressionBatch(options: BatchOptions): BatchLeg[] {
       const a = roundTo(base + (random() - 0.5) * 0.1, precision);
       const b = roundTo(1 / (overround - 1 / a), precision);
       add(eventId, bookmaker(sequential), sequential, {
-        ...(participant !== undefined ? { family, marketType, period, participant, line, outcome: outcomeA, odds: a } : { family, marketType, period, line, outcome: outcomeA, odds: a }),
+        ...(participant !== undefined
+          ? { family, marketType, period, participant, line, outcome: outcomeA, odds: a }
+          : { family, marketType, period, line, outcome: outcomeA, odds: a }),
       });
       sequential += 1;
       add(eventId, bookmaker(sequential), sequential, {
-        ...(participant !== undefined ? { family, marketType, period, participant, line, outcome: outcomeB, odds: b } : { family, marketType, period, line, outcome: outcomeB, odds: b }),
+        ...(participant !== undefined
+          ? { family, marketType, period, participant, line, outcome: outcomeB, odds: b }
+          : { family, marketType, period, line, outcome: outcomeB, odds: b }),
       });
       sequential += 1;
     };
@@ -136,11 +141,29 @@ export function buildRegressionBatch(options: BatchOptions): BatchLeg[] {
       const o1 = roundTo(1 / r1, precision);
       const o2 = roundTo(1 / r2, precision);
       const o3 = roundTo(1 / r3, precision);
-      add(eventId, bookmaker(sequential), sequential, { family, marketType, period, outcome: "HOME", odds: o1 });
+      add(eventId, bookmaker(sequential), sequential, {
+        family,
+        marketType,
+        period,
+        outcome: "HOME",
+        odds: o1,
+      });
       sequential += 1;
-      add(eventId, bookmaker(sequential), sequential, { family, marketType, period, outcome: "DRAW", odds: o2 });
+      add(eventId, bookmaker(sequential), sequential, {
+        family,
+        marketType,
+        period,
+        outcome: "DRAW",
+        odds: o2,
+      });
       sequential += 1;
-      add(eventId, bookmaker(sequential), sequential, { family, marketType, period, outcome: "AWAY", odds: o3 });
+      add(eventId, bookmaker(sequential), sequential, {
+        family,
+        marketType,
+        period,
+        outcome: "AWAY",
+        odds: o3,
+      });
       sequential += 1;
     };
 

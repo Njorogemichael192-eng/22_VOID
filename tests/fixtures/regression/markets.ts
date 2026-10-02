@@ -49,10 +49,7 @@ export const marketNormalizationCases: MarketNormalizationCase[] = [
     id: "norm-total-goals-equivalent",
     label: "Total Goals O/U",
     key: "goals",
-    outcomes: [
-      { name: "Over 2.5" },
-      { name: "Under 2.5" },
-    ],
+    outcomes: [{ name: "Over 2.5" }, { name: "Under 2.5" }],
     expected: {
       matched: true,
       family: "MATCH_TOTAL",
@@ -186,10 +183,7 @@ export const marketNormalizationCases: MarketNormalizationCase[] = [
     id: "norm-key-registry-totals",
     label: "Total Goals",
     key: "totals",
-    outcomes: [
-      { name: "Over 2.5" },
-      { name: "Under 2.5" },
-    ],
+    outcomes: [{ name: "Over 2.5" }, { name: "Under 2.5" }],
     expected: {
       matched: true,
       family: "MATCH_TOTAL",

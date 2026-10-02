@@ -162,7 +162,7 @@ export function rateLimitConfigFromEnv(env: RateLimitEnv): ApiRateLimitConfig {
     refillPerSecond: positiveEnvNumber(
       env,
       "API_RATE_LIMIT_REFILL_PER_SECOND",
-      DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND,
+      DEFAULT_API_RATE_LIMIT_REFILL_PER_SECOND
     ),
   };
 }

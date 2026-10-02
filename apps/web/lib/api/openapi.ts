@@ -467,8 +467,18 @@ export const openApiDocument: OpenApiDocument = {
             description: "Canonical event id (all selections' series)",
             schema: { type: "string" },
           },
-          { name: "from", in: "query", description: "ISO-8601 lower bound (inclusive)", schema: { type: "string", format: "date-time" } },
-          { name: "to", in: "query", description: "ISO-8601 upper bound (inclusive)", schema: { type: "string", format: "date-time" } },
+          {
+            name: "from",
+            in: "query",
+            description: "ISO-8601 lower bound (inclusive)",
+            schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "to",
+            in: "query",
+            description: "ISO-8601 upper bound (inclusive)",
+            schema: { type: "string", format: "date-time" },
+          },
         ],
         security: [{ apiKey: [] }],
         responses: {
@@ -480,7 +490,10 @@ export const openApiDocument: OpenApiDocument = {
                   type: "object",
                   required: ["data"],
                   properties: {
-                    data: { type: "array", items: { $ref: "#/components/schemas/OddsHistoryPoint" } },
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/OddsHistoryPoint" },
+                    },
                   },
                 },
               },
@@ -498,7 +511,12 @@ export const openApiDocument: OpenApiDocument = {
         parameters: [
           { $ref: "#/components/parameters/limit" },
           { name: "sourceKey", in: "query", schema: { type: "string" } },
-          { name: "after", in: "query", description: "Only cycles finished after this time (ISO-8601)", schema: { type: "string", format: "date-time" } },
+          {
+            name: "after",
+            in: "query",
+            description: "Only cycles finished after this time (ISO-8601)",
+            schema: { type: "string", format: "date-time" },
+          },
         ],
         security: [{ apiKey: [] }],
         responses: {
@@ -525,7 +543,12 @@ export const openApiDocument: OpenApiDocument = {
         tags: ["history"],
         summary: "False-positive analysis over opportunity episodes",
         parameters: [
-          { name: "after", in: "query", description: "Only episodes last seen after this time (ISO-8601)", schema: { type: "string", format: "date-time" } },
+          {
+            name: "after",
+            in: "query",
+            description: "Only episodes last seen after this time (ISO-8601)",
+            schema: { type: "string", format: "date-time" },
+          },
         ],
         security: [{ apiKey: [] }],
         responses: {
@@ -749,7 +772,9 @@ export const openApiDocument: OpenApiDocument = {
             },
           },
           status: { $ref: "#/components/schemas/OpportunityStatus" },
-          rejectionReason: { oneOf: [{ $ref: "#/components/schemas/RejectionReason" }, { type: "null" }] },
+          rejectionReason: {
+            oneOf: [{ $ref: "#/components/schemas/RejectionReason" }, { type: "null" }],
+          },
           marketStructure: { type: "string", nullable: true },
           totalStake: { type: "number", nullable: true },
           minReturn: { type: "number", nullable: true },
@@ -881,7 +906,14 @@ export const openApiDocument: OpenApiDocument = {
             type: "array",
             items: {
               type: "object",
-              required: ["selectionId", "bookmaker", "outcome", "market", "snapshotOdds", "movement"],
+              required: [
+                "selectionId",
+                "bookmaker",
+                "outcome",
+                "market",
+                "snapshotOdds",
+                "movement",
+              ],
               properties: {
                 selectionId: { type: "string" },
                 bookmaker: { type: "string" },
@@ -898,7 +930,10 @@ export const openApiDocument: OpenApiDocument = {
                   },
                 },
                 snapshotOdds: { type: "number" },
-                history: { type: "array", items: { $ref: "#/components/schemas/OddsHistoryPoint" } },
+                history: {
+                  type: "array",
+                  items: { $ref: "#/components/schemas/OddsHistoryPoint" },
+                },
                 movement: {
                   type: "object",
                   required: ["first", "last", "min", "max", "delta", "pctChange"],

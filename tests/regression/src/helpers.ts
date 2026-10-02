@@ -37,7 +37,9 @@ export function toPricedSelection(leg: RegressionLeg): PricedSelection {
     ...(leg.observedAt !== undefined ? { observedAt: leg.observedAt } : {}),
     ...(leg.sourceUpdatedAt !== undefined ? { sourceUpdatedAt: leg.sourceUpdatedAt } : {}),
     ...(leg.eventConfidence !== undefined ? { eventConfidence: leg.eventConfidence } : {}),
-    ...(leg.settlementConfidence !== undefined ? { settlementConfidence: leg.settlementConfidence } : {}),
+    ...(leg.settlementConfidence !== undefined
+      ? { settlementConfidence: leg.settlementConfidence }
+      : {}),
     ...(leg.sourceStatus !== undefined ? { sourceStatus: leg.sourceStatus } : {}),
   };
 }

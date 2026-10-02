@@ -14,11 +14,7 @@ import {
   isApiPath,
   pageContentSecurityPolicy,
 } from "./headers";
-import {
-  guardRequest,
-  resetGuardAuditThrottle,
-  UNAUTHENTICATED_AUDIT_INTERVAL_MS,
-} from "./guard";
+import { guardRequest, resetGuardAuditThrottle, UNAUTHENTICATED_AUDIT_INTERVAL_MS } from "./guard";
 import { memoryAudit, type SecurityAuditEntry } from "./audit";
 import {
   ApiRateLimiter,
@@ -92,7 +88,7 @@ describe("clientIp", () => {
     expect(clientIp(forwarded)).toBe("203.0.113.7");
 
     expect(
-      clientIp(new Request("http://localhost/", { headers: { "x-real-ip": "198.51.100.4" } })),
+      clientIp(new Request("http://localhost/", { headers: { "x-real-ip": "198.51.100.4" } }))
     ).toBe("198.51.100.4");
 
     expect(clientIp(new Request("http://localhost/"))).toBe("unknown");
@@ -116,7 +112,7 @@ describe("rateLimitConfigFromEnv", () => {
       rateLimitConfigFromEnv({
         API_RATE_LIMIT_CAPACITY: "30",
         API_RATE_LIMIT_REFILL_PER_SECOND: "0.5",
-      }),
+      })
     ).toEqual({ capacity: 30, refillPerSecond: 0.5 });
   });
 
@@ -125,16 +121,16 @@ describe("rateLimitConfigFromEnv", () => {
     // which for a security control is a limit looser than intended and a log
     // with nothing in it.
     expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "120/min" })).toThrow(
-      /Invalid API_RATE_LIMIT_CAPACITY/,
+      /Invalid API_RATE_LIMIT_CAPACITY/
     );
     expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "0" })).toThrow(
-      /Invalid API_RATE_LIMIT_CAPACITY/,
+      /Invalid API_RATE_LIMIT_CAPACITY/
     );
     expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_CAPACITY: "-5" })).toThrow(
-      /Invalid API_RATE_LIMIT_CAPACITY/,
+      /Invalid API_RATE_LIMIT_CAPACITY/
     );
     expect(() => rateLimitConfigFromEnv({ API_RATE_LIMIT_REFILL_PER_SECOND: "fast" })).toThrow(
-      /Invalid API_RATE_LIMIT_REFILL_PER_SECOND/,
+      /Invalid API_RATE_LIMIT_REFILL_PER_SECOND/
     );
   });
 
@@ -162,7 +158,7 @@ describe("guardRequest", () => {
         method: "POST",
         headers: { "x-api-key": READER_KEY },
       }),
-      { env, security: { audit: memoryAudit(log) } },
+      { env, security: { audit: memoryAudit(log) } }
     );
     expect(isResponse(response)).toBe(true);
     expect((response as Response).status).toBe(405);
@@ -175,10 +171,13 @@ describe("guardRequest", () => {
     // Phase 18: auditing this pre-auth rejection let an unauthenticated flood
     // amplify into one auditLog.create per request.
     const log: SecurityAuditEntry[] = [];
-    const response = guardRequest(new Request("http://localhost/api/v1/events", { method: "POST" }), {
-      env,
-      security: { audit: memoryAudit(log) },
-    });
+    const response = guardRequest(
+      new Request("http://localhost/api/v1/events", { method: "POST" }),
+      {
+        env,
+        security: { audit: memoryAudit(log) },
+      }
+    );
     expect((response as Response).status).toBe(405);
     expect((response as Response).headers.get("allow")).toBe("GET");
     await settle();
@@ -191,7 +190,7 @@ describe("guardRequest", () => {
         method: "GET",
         headers: { "content-length": "10" },
       }),
-      { env },
+      { env }
     );
     expect((response as Response).status).toBe(400);
   });
@@ -202,7 +201,7 @@ describe("guardRequest", () => {
         method: "GET",
         headers: { "content-length": "1000000" },
       }),
-      { env },
+      { env }
     );
     expect((response as Response).status).toBe(413);
   });
@@ -295,7 +294,7 @@ describe("guardRequest", () => {
           // rate-limit key would do.
           headers: { "x-forwarded-for": `10.0.0.${i % 255}` },
         }),
-        deps,
+        deps
       );
       expect((response as Response).status).toBe(405);
     }
@@ -344,7 +343,10 @@ describe("guardRequest", () => {
     const url = "http://localhost/api/v1/events";
 
     for (let i = 0; i < 5; i += 1) {
-      guardRequest(new Request(url, { method: "POST", headers: { "x-api-key": READER_KEY } }), deps);
+      guardRequest(
+        new Request(url, { method: "POST", headers: { "x-api-key": READER_KEY } }),
+        deps
+      );
     }
     await settle();
     expect(log.filter((e) => e.action === "METHOD_NOT_ALLOWED")).toHaveLength(5);
@@ -367,7 +369,7 @@ describe("guardRequest", () => {
     const response = guardRequest(
       get("http://localhost/api/v1/admin/sources", READER_KEY),
       { env, security: { audit: memoryAudit(log) } },
-      "admin",
+      "admin"
     );
     expect((response as Response).status).toBe(403);
     await settle();
@@ -379,7 +381,7 @@ describe("guardRequest", () => {
     const result = guardRequest(
       get("http://localhost/api/v1/admin/sources", ADMIN_KEY, "10.10.10.10"),
       { env, security: { audit: memoryAudit(log) } },
-      "admin",
+      "admin"
     );
     expect(result.ok).toBe(true);
     await settle();
@@ -450,7 +452,7 @@ describe("secrets server-side only", () => {
   it("exposes no process.env reads from client component files", () => {
     const root = resolve(import.meta.dirname, "..", "..");
     const clientLayer = collectEnvReads(root).filter((read) =>
-      read.path.startsWith(`components${sep}`),
+      read.path.startsWith(`components${sep}`)
     );
     expect(clientLayer).toHaveLength(0);
   });
@@ -468,7 +470,7 @@ describe("secrets server-side only", () => {
 describe("Caddy edge headers do not weaken the app's policy", () => {
   const caddyfile = readFileSync(
     resolve(import.meta.dirname, "..", "..", "..", "..", "infra", "Caddyfile"),
-    "utf8",
+    "utf8"
   );
 
   /** Every `header` directive in the Caddyfile, with its optional matcher block. */
@@ -496,7 +498,9 @@ describe("Caddy edge headers do not weaken the app's policy", () => {
   }
 
   it("scopes the CSP away from /api/* so the app's stricter API policy survives", () => {
-    const cspDirectives = caddyHeaderDirectives().filter((d) => d.header === "Content-Security-Policy");
+    const cspDirectives = caddyHeaderDirectives().filter(
+      (d) => d.header === "Content-Security-Policy"
+    );
     expect(cspDirectives.length).toBeGreaterThan(0);
 
     for (const directive of cspDirectives) {

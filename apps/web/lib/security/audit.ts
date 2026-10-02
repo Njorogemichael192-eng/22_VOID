@@ -84,7 +84,7 @@ export function dbAudit(): SecurityAudit {
           writerUnavailable = true;
           console.warn(
             "[security] audit writer unavailable; security events will not be persisted",
-            error,
+            error
           );
           return;
         }

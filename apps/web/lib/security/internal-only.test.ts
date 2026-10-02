@@ -119,7 +119,10 @@ describe("checkInternalOnly", () => {
 
   it("accepts an explicit argument over the environment", () => {
     process.env.READINESS_ALLOWED_CIDRS = "10.0.0.0/8";
-    const decision = checkInternalOnly(probeWith({ "x-forwarded-for": "203.0.113.9" }), "203.0.113.0/24");
+    const decision = checkInternalOnly(
+      probeWith({ "x-forwarded-for": "203.0.113.9" }),
+      "203.0.113.0/24"
+    );
     expect(decision.allowed).toBe(true);
   });
 
@@ -130,14 +133,17 @@ describe("checkInternalOnly", () => {
   });
 
   it("does not let a malformed entry widen the allowlist", () => {
-    const decision = checkInternalOnly(probeWith({ "x-forwarded-for": "203.0.113.9" }), "0.0.0.0/99");
+    const decision = checkInternalOnly(
+      probeWith({ "x-forwarded-for": "203.0.113.9" }),
+      "0.0.0.0/99"
+    );
     expect(decision.allowed).toBe(false);
   });
 
   it("documents the ranges it applies by default", () => {
     expect(DEFAULT_INTERNAL_CIDRS).toContain("172.16.0.0/12");
     expect(checkInternalOnly(probeWith({ "x-forwarded-for": "172.20.0.3" })).cidrs).toEqual(
-      DEFAULT_INTERNAL_CIDRS,
+      DEFAULT_INTERNAL_CIDRS
     );
   });
 });

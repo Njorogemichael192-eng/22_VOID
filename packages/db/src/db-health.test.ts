@@ -108,7 +108,7 @@ describe("checkDbHealth pooling", () => {
     await checkDbHealth(URL_A, { timeoutMs: 2_000 });
     expect(firstPoolConfig()).toMatchObject({ connectionTimeoutMillis: 2_000 });
     expect(String((firstPoolConfig() as { connectionString: string }).connectionString)).toContain(
-      "connect_timeout=2",
+      "connect_timeout=2"
     );
   });
 

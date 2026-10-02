@@ -53,10 +53,7 @@ function createProvider(config: ResolvedProviderConfig): MockProvider | OddsApiP
  * tidy arbitrage that does not exist. The store label is in the banner on purpose
  * — synthetic odds landing in postgres are the case that matters.
  */
-function warnOnSyntheticProductionData(
-  provider: ResolvedProviderConfig,
-  storeLabel: string
-): void {
+function warnOnSyntheticProductionData(provider: ResolvedProviderConfig, storeLabel: string): void {
   if (provider.kind !== "mock" || !isProductionEnvironment()) return;
   const width = 74;
   const line = (text: string): string => `  # ${text.padEnd(width - 4)}#`;

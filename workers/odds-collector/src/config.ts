@@ -51,7 +51,8 @@ function optionalProviderValue(
 }
 
 /** Query parameters that would carry a credential in the URL. */
-const CREDENTIAL_QUERY_PARAM = /^(api[-_]?key|key|token|access[-_]?token|password|secret|sig|signature)$/i;
+const CREDENTIAL_QUERY_PARAM =
+  /^(api[-_]?key|key|token|access[-_]?token|password|secret|sig|signature)$/i;
 
 function resolveBaseUrl(raw: string | undefined, production: boolean): string | undefined {
   if (raw === undefined) return undefined;
@@ -124,7 +125,11 @@ export function resolveProviderConfig(
     // because that default fabricates data.
     invalidConfig("WORKER_PROVIDER", "odds-api (the mock provider is refused in production)");
   }
-  if (configuredProvider !== undefined && configuredProvider !== "mock" && configuredProvider !== "odds-api") {
+  if (
+    configuredProvider !== undefined &&
+    configuredProvider !== "mock" &&
+    configuredProvider !== "odds-api"
+  ) {
     throw new Error(`Unknown WORKER_PROVIDER=${configuredProvider}`);
   }
 

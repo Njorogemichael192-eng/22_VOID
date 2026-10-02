@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPrismaClient, type PrismaClient } from "../index.js";
 import {
+  completeHeartbeat,
   loadPricedSelections,
   markSourceStatus,
   persistCanonicalRun,
@@ -104,7 +105,9 @@ describe.skipIf(!dbAvailable)("Phase 14 - scan worker store integration", () => 
     await client.settlementRule.deleteMany({
       where: { oddsSource: { key: { startsWith: "int-test-" } } },
     });
-    await client.rawPayload.deleteMany({ where: { oddsSource: { key: { startsWith: "int-test-" } } } });
+    await client.rawPayload.deleteMany({
+      where: { oddsSource: { key: { startsWith: "int-test-" } } },
+    });
     await client.event.deleteMany({ where: eventWhere });
     await client.oddsSource.deleteMany({ where: { key: { startsWith: "int-test-" } } });
     await client.scannerHealth.deleteMany({ where: { runId: { startsWith: "run-" } } });
@@ -221,6 +224,51 @@ describe.skipIf(!dbAvailable)("Phase 14 - scan worker store integration", () => 
     expect(row.settlementConfidence).toBe(1);
   });
 
+  it("keeps one row per run: completion updates the row the start opened", async () => {
+    // scanner_health.runId is unique, and the read model depends on it:
+    // listScannerRuns maps one row to one run, `_count.scannerChecks` is a run
+    // count, and sourceLatencyStats aggregates many runs per source. The worker
+    // writes in two phases, so this pins the invariant that made those true.
+    const runId = `run-${suffix}-two-phase`;
+    const startedAt = new Date("2026-01-02T03:04:05.000Z");
+
+    const opened = await recordHeartbeat(db, {
+      runId,
+      status: "HEALTHY",
+      startedAt,
+    });
+    expect(opened.finishedAt).toBeNull();
+
+    const finishedAt = new Date("2026-01-02T03:04:07.000Z");
+    const completed = await completeHeartbeat(db, {
+      runId,
+      status: "DEGRADED",
+      message: "poll slow",
+      finishedAt,
+    });
+
+    // Same row, not a new one: identical primary key.
+    expect(completed.id).toBe(opened.id);
+    expect(completed.status).toBe("DEGRADED");
+    expect(completed.message).toBe("poll slow");
+    expect(completed.startedAt).toEqual(startedAt);
+    expect(completed.finishedAt).toEqual(finishedAt);
+
+    const rows = await db.scannerHealth.findMany({ where: { runId } });
+    expect(rows).toHaveLength(1);
+
+    // The constraint that caused the production failure (P2002 on
+    // scanner_health_runId_key): a second start for the same run must be
+    // rejected, which is why completion has to be an update.
+    await expect(recordHeartbeat(db, { runId, status: "HEALTHY" })).rejects.toThrow();
+
+    // Fail loud rather than fabricate: completing a run that never started is
+    // P2025, not a silent insert.
+    await expect(
+      completeHeartbeat(db, { runId: `run-${suffix}-never-started`, status: "HEALTHY" })
+    ).rejects.toThrow();
+  });
+
   it("records heartbeats and persists opportunities with legs and audit trail", async () => {
     const heartbeat = await recordHeartbeat(db, {
       runId: `run-${suffix}-a`,
@@ -244,9 +292,7 @@ describe.skipIf(!dbAvailable)("Phase 14 - scan worker store integration", () => 
       roi: 0.015,
       engineVersion: "1",
       detectedAt: "2026-09-23T10:06:00.000Z",
-      legs: [
-        { selectionId, oddsSnapshot: 2.2, stake: 50, guaranteedReturn: 110 },
-      ],
+      legs: [{ selectionId, oddsSnapshot: 2.2, stake: 50, guaranteedReturn: 110 }],
       audit: [{ action: "OPPORTUNITY_CREATED", actor: provider }],
     });
 

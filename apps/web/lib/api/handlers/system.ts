@@ -43,7 +43,7 @@ export const READINESS_PROBE_TIMEOUT_MS = 2_000;
 
 export type DbHealthProbe = (
   connectionString: string,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number }
 ) => Promise<DbHealth>;
 
 export interface ReadyDeps {
@@ -76,7 +76,7 @@ const defaultDbHealthProbe: DbHealthProbe = async (connectionString, options) =>
 async function probeDatabase(
   databaseUrl: string,
   probe: DbHealthProbe,
-  timeoutMs: number,
+  timeoutMs: number
 ): Promise<boolean> {
   const pending = inFlightProbes.get(databaseUrl);
   if (pending !== undefined) return pending;
@@ -128,7 +128,7 @@ export async function ready(deps: ReadyDeps = {}): Promise<Response> {
       databaseReachable = await probeDatabase(
         configuredUrl,
         probe,
-        deps.probeTimeoutMs ?? READINESS_PROBE_TIMEOUT_MS,
+        deps.probeTimeoutMs ?? READINESS_PROBE_TIMEOUT_MS
       );
       if (!injected) readinessCache.set(configuredUrl, { at, reachable: databaseReachable });
     }
@@ -180,10 +180,7 @@ export async function scannerStatus(request: Request, deps: HandlerDeps): Promis
   });
 }
 
-function runIsStale(
-  run: { startedAt: string; finishedAt: string | null },
-  now: number,
-): boolean {
+function runIsStale(run: { startedAt: string; finishedAt: string | null }, now: number): boolean {
   const anchor = run.finishedAt ?? run.startedAt;
   const at = Date.parse(anchor);
   if (Number.isNaN(at)) return false;

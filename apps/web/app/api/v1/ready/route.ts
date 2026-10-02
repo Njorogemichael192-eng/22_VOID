@@ -18,12 +18,9 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   const decision = checkInternalOnly(request);
   if (!decision.allowed) {
-    return jsonError(
-      "FORBIDDEN",
-      "Readiness is restricted to internal callers.",
-      403,
-      { reason: decision.reason },
-    );
+    return jsonError("FORBIDDEN", "Readiness is restricted to internal callers.", 403, {
+      reason: decision.reason,
+    });
   }
 
   const response = await ready();

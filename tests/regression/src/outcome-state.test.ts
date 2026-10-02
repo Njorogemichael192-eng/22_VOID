@@ -1,9 +1,21 @@
 import type { MarketType } from "@22void/domain";
 import type { SettleableSelection } from "@22void/settlement";
-import { boundaryMax, buildStateModel, goalMargin, matchTotal, payoffMatrix, settleVector } from "@22void/outcome-engine";
+import {
+  boundaryMax,
+  buildStateModel,
+  goalMargin,
+  matchTotal,
+  payoffMatrix,
+  settleVector,
+} from "@22void/outcome-engine";
 import { describe, expect, it } from "vitest";
 
-import { goldenScoreEvents, regressionCases, SCORE_AWAY_BY_ONE, SCORE_TOTAL_TWO } from "../../../tests/fixtures/regression/index.js";
+import {
+  goldenScoreEvents,
+  regressionCases,
+  SCORE_AWAY_BY_ONE,
+  SCORE_TOTAL_TWO,
+} from "../../../tests/fixtures/regression/index.js";
 
 function toSelection(leg: RegistrationLeg): SettleableSelection {
   return {
@@ -101,7 +113,10 @@ describe("Phase 17 outcome-state regression", () => {
     const model = buildStateModel(legs.map(toSelection));
     const pushState = model.states.find((state) => {
       const total = matchTotal(state.representative);
-      return total === SCORE_AWAY_BY_ONE.total && goalMargin(state.representative) === SCORE_AWAY_BY_ONE.margin;
+      return (
+        total === SCORE_AWAY_BY_ONE.total &&
+        goalMargin(state.representative) === SCORE_AWAY_BY_ONE.margin
+      );
     });
     expect(pushState).toBeDefined();
     expect(pushState?.vector).toEqual(["PUSH", "PUSH"]);
@@ -140,9 +155,7 @@ describe("Phase 17 outcome-state regression", () => {
     });
     expect(vector.results).toEqual(["FULL_WIN", "FULL_WIN"]);
     // The reduced model must still expose the overlapping representative.
-    const inModel = model.states.find(
-      (state) => matchTotal(state.representative) === eleven.total
-    );
+    const inModel = model.states.find((state) => matchTotal(state.representative) === eleven.total);
     expect(inModel?.vector).toEqual(["FULL_WIN", "FULL_WIN"]);
   });
 

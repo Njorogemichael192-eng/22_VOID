@@ -22,7 +22,7 @@ export interface PrismaPoolOptions {
  */
 export function createPrismaClient(
   connectionString: string,
-  pool?: PrismaPoolOptions,
+  pool?: PrismaPoolOptions
 ): PrismaClient {
   const adapter =
     pool === undefined

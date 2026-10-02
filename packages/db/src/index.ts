@@ -26,6 +26,7 @@ export {
   loadPricedSelections,
   markSourceStatus,
   recordHeartbeat,
+  completeHeartbeat,
   persistOpportunity,
   type PersistEventInput,
   type PersistEventSourceInput,
@@ -37,6 +38,7 @@ export {
   type DbSourceStatus,
   type DbPricedSelection,
   type RecordHeartbeatInput,
+  type CompleteHeartbeatInput,
   type HeartbeatRow,
   type PersistOpportunityLegInput,
   type PersistOpportunityAuditInput,
@@ -185,7 +187,7 @@ export async function closeHealthProbeClients(): Promise<void> {
 /** Runs `SELECT 1` against the given connection string, bounded by `timeoutMs`. */
 export async function checkDbHealth(
   connectionString: string,
-  options: DbHealthOptions = {},
+  options: DbHealthOptions = {}
 ): Promise<DbHealth> {
   const timeoutMs = options.timeoutMs ?? 5_000;
   const now = options.now ?? (() => performance.now());
@@ -196,7 +198,7 @@ export async function checkDbHealth(
   const expiry = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
       () => reject(new Error(`database health probe timed out after ${timeoutMs}ms`)),
-      timeoutMs,
+      timeoutMs
     );
   });
 

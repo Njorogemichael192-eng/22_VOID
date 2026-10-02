@@ -78,14 +78,14 @@ describe("fetchJson error messages", () => {
       throw new TypeError(`fetch failed for https://api.example.com/v4/odds?apiKey=${key}`);
     }) as unknown as typeof fetch;
     try {
-      await expect(fetchJson(`https://api.example.com/v4/odds?apiKey=${key}`, {})).rejects.toSatisfy(
-        (error: unknown) => {
-          const message = (error as Error).message;
-          expect(message).not.toContain(key);
-          expect(message).toContain("network error");
-          return true;
-        }
-      );
+      await expect(
+        fetchJson(`https://api.example.com/v4/odds?apiKey=${key}`, {})
+      ).rejects.toSatisfy((error: unknown) => {
+        const message = (error as Error).message;
+        expect(message).not.toContain(key);
+        expect(message).toContain("network error");
+        return true;
+      });
     } finally {
       globalThis.fetch = original;
     }

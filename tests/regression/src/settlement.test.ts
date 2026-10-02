@@ -86,7 +86,10 @@ describe("Phase 17 settlement regression", () => {
       }
       const shares = componentPayouts(settled.assessment, 100, row.selection.odds);
       const total = shares.reduce((sum, share) => sum + share, 0);
-      expect(total, row.id).toBeCloseTo(payout(100, row.selection.odds, settled.assessment.state.result), 6);
+      expect(total, row.id).toBeCloseTo(
+        payout(100, row.selection.odds, settled.assessment.state.result),
+        6
+      );
       for (const share of shares) {
         expect(share, row.id).toBeGreaterThanOrEqual(0);
       }

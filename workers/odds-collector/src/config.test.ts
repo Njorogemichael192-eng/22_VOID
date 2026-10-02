@@ -98,12 +98,12 @@ describe("worker configuration", () => {
   it("rejects an unknown provider outside production too", () => {
     // Previously `other` silently resolved to mock everywhere, which hid typos
     // in a developer's env file until the collector produced fake data.
-    expect(() => resolveProviderConfig({ NODE_ENV: "development", WORKER_PROVIDER: "other" })).toThrow(
-      /Unknown WORKER_PROVIDER=other/
-    );
-    expect(() => resolveProviderConfig({ NODE_ENV: "development", WORKER_PROVIDER: " ODDS-API " })).toThrow(
-      /Unknown WORKER_PROVIDER/
-    );
+    expect(() =>
+      resolveProviderConfig({ NODE_ENV: "development", WORKER_PROVIDER: "other" })
+    ).toThrow(/Unknown WORKER_PROVIDER=other/);
+    expect(() =>
+      resolveProviderConfig({ NODE_ENV: "development", WORKER_PROVIDER: " ODDS-API " })
+    ).toThrow(/Unknown WORKER_PROVIDER/);
   });
 
   it("requires a database in production", () => {

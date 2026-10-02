@@ -17,7 +17,9 @@ const openServers: { close: (cb: () => void) => void }[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    openServers.splice(0).map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    openServers
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve())))
   );
 });
 
@@ -27,9 +29,10 @@ interface Harness {
   readonly server: ReturnType<typeof createHealthServer>;
 }
 
-async function startHealthServer(
-  options: { now: number; lastCycle?: { status: string; at: number } } ,
-): Promise<Harness> {
+async function startHealthServer(options: {
+  now: number;
+  lastCycle?: { status: string; at: number };
+}): Promise<Harness> {
   const nowRef = { value: options.now };
   const state = createWorkerHealthState({
     startedAt: STARTED_AT,

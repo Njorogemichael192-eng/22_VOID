@@ -26,37 +26,41 @@ function toSelection(leg: RegressionLeg): SettleableSelection {
 }
 
 function arbCaseIds(): string[] {
-  return regressionCases
-    .filter((entry) => entry.expected.scan === "ARB")
-    .map((entry) => entry.id);
+  return regressionCases.filter((entry) => entry.expected.scan === "ARB").map((entry) => entry.id);
 }
 
 describe("Phase 17 optimizer regression", () => {
-  it.each(arbCaseIds())("%s produces a guaranteed positive return on the reduced model", (caseId) => {
-    const entry = regressionCases.find((candidate) => candidate.id === caseId)!;
-    const selections = entry.legs.map(toSelection);
-    const legs = entry.legs.map(toArbitrageLeg);
-    const model = buildStateModel(selections);
-    expect(model.unknown).toHaveLength(0);
-    expect(model.states.length).toBeGreaterThan(0);
+  it.each(arbCaseIds())(
+    "%s produces a guaranteed positive return on the reduced model",
+    (caseId) => {
+      const entry = regressionCases.find((candidate) => candidate.id === caseId)!;
+      const selections = entry.legs.map(toSelection);
+      const legs = entry.legs.map(toArbitrageLeg);
+      const model = buildStateModel(selections);
+      expect(model.unknown).toHaveLength(0);
+      expect(model.states.length).toBeGreaterThan(0);
 
-    const plan = optimizeStakes(model.states, legs, 100);
-    expect(plan.isArb, caseId).toBe(true);
-    expect(plan.status).toBe("ARB");
-    expect(plan.guaranteedProfit, caseId).toBeGreaterThan(0);
-    expect(plan.stakes.reduce((sum, stake) => sum + stake, 0)).toBeCloseTo(100, 6);
-    // A leg can legitimately take a zero stake when another leg on a different
-    // metric already covers its winning states (e.g. DC overlaps 1X on a home
-    // win), but at least one leg must actually be backed.
-    expect(plan.stakes.some((stake) => stake > 0), caseId).toBe(true);
-    for (const stake of plan.stakes) {
-      expect(stake).toBeGreaterThanOrEqual(0);
+      const plan = optimizeStakes(model.states, legs, 100);
+      expect(plan.isArb, caseId).toBe(true);
+      expect(plan.status).toBe("ARB");
+      expect(plan.guaranteedProfit, caseId).toBeGreaterThan(0);
+      expect(plan.stakes.reduce((sum, stake) => sum + stake, 0)).toBeCloseTo(100, 6);
+      // A leg can legitimately take a zero stake when another leg on a different
+      // metric already covers its winning states (e.g. DC overlaps 1X on a home
+      // win), but at least one leg must actually be backed.
+      expect(
+        plan.stakes.some((stake) => stake > 0),
+        caseId
+      ).toBe(true);
+      for (const stake of plan.stakes) {
+        expect(stake).toBeGreaterThanOrEqual(0);
+      }
+      for (const stateReturn of plan.stateReturns) {
+        expect(stateReturn).toBeGreaterThan(100);
+        expect(stateReturn).toBeCloseTo(plan.minReturn, 6);
+      }
     }
-    for (const stateReturn of plan.stateReturns) {
-      expect(stateReturn).toBeGreaterThan(100);
-      expect(stateReturn).toBeCloseTo(plan.minReturn, 6);
-    }
-  });
+  );
 
   it("the Classic two-way formula (§45) matches the LP on a standard complement", () => {
     const entry = regressionCases.find(

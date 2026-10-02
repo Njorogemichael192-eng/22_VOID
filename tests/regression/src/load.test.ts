@@ -46,9 +46,7 @@ describe("Phase 17 candidate-generation load regression", () => {
     for (let event = 0; event < EVENTS; event += 5) {
       const id = `load-evt-${String(event).padStart(3, "0")}`;
       const legs = batch.filter((leg) => leg.eventId === id);
-      const pair = legs.filter(
-        (leg) => leg.family === "MATCH_TOTAL" && leg.line === "2.5"
-      );
+      const pair = legs.filter((leg) => leg.family === "MATCH_TOTAL" && leg.line === "2.5");
       expect(pair).toHaveLength(2);
       expect(reciprocalSum(pair.map((leg) => leg.odds))).toBeLessThan(1);
       expect(pair[0]!.bookmaker).not.toBe(pair[1]!.bookmaker);
@@ -79,30 +77,26 @@ describe("Phase 17 candidate-generation load regression", () => {
     }
   });
 
-  it(
-    "produces guaranteed-profit arbs at the expected density within the timeout budget",
-    () => {
-      const batch = buildRegressionBatch({ events: EVENTS, arbEveryN: 5, seed: 7 });
-      const priced = pricedFrom(batch);
-      const base = Date.parse(batch[0]!.sourceUpdatedAt);
-      const scans = scanCandidates(priced, {
-        allowSameBookmaker: false,
-        now: base + 120_000,
-      });
+  it("produces guaranteed-profit arbs at the expected density within the timeout budget", () => {
+    const batch = buildRegressionBatch({ events: EVENTS, arbEveryN: 5, seed: 7 });
+    const priced = pricedFrom(batch);
+    const base = Date.parse(batch[0]!.sourceUpdatedAt);
+    const scans = scanCandidates(priced, {
+      allowSameBookmaker: false,
+      now: base + 120_000,
+    });
 
-      expect(scans).toHaveLength(EVENTS * perEventCandidates(priced));
-      const arbs = scans.filter((scan) => scan.status === "ARB");
-      // The always-underround BTTS pair is independently arbitrageable, and the
-      // forced underround events (0,5,10,15) add the five two-way pairs plus the
-      // 1X2 partition, so arbs are guaranteed on every single event.
-      expect(arbs.length).toBeGreaterThanOrEqual(EVENTS);
-      for (const arb of arbs) {
-        expect(arb.plan?.isArb).toBe(true);
-        expect(arb.plan?.guaranteedProfit).toBeGreaterThan(0);
-        const books = new Set(arb.candidate.legs.map((leg) => leg.bookmaker));
-        expect(books.size).toBe(arb.candidate.legs.length);
-      }
-    },
-    30_000
-  );
+    expect(scans).toHaveLength(EVENTS * perEventCandidates(priced));
+    const arbs = scans.filter((scan) => scan.status === "ARB");
+    // The always-underround BTTS pair is independently arbitrageable, and the
+    // forced underround events (0,5,10,15) add the five two-way pairs plus the
+    // 1X2 partition, so arbs are guaranteed on every single event.
+    expect(arbs.length).toBeGreaterThanOrEqual(EVENTS);
+    for (const arb of arbs) {
+      expect(arb.plan?.isArb).toBe(true);
+      expect(arb.plan?.guaranteedProfit).toBeGreaterThan(0);
+      const books = new Set(arb.candidate.legs.map((leg) => leg.bookmaker));
+      expect(books.size).toBe(arb.candidate.legs.length);
+    }
+  }, 30_000);
 });

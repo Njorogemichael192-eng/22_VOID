@@ -7,7 +7,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { defaultRetryPolicy } from "./retry.js";
-import { createScanWorker, runScanCycle } from "./runtime.js";
+import { createScanWorker, nativeScheduler, runScanCycle } from "./runtime.js";
 import { createMemoryWorkerStore } from "./store.js";
 
 const NOW = "2026-09-21T12:00:00.000Z";
@@ -18,7 +18,10 @@ class FlakyProvider implements OddsProvider {
   polls = 0;
   failuresLeft: number;
 
-  constructor(private readonly nowProvider: () => string, failuresLeft: number) {
+  constructor(
+    private readonly nowProvider: () => string,
+    failuresLeft: number
+  ) {
     this.failuresLeft = failuresLeft;
   }
 
@@ -32,7 +35,12 @@ class FlakyProvider implements OddsProvider {
   }
 
   async health() {
-    return { provider: this.providerKey, reachable: true, latencyMs: 0, checkedAt: this.nowProvider() };
+    return {
+      provider: this.providerKey,
+      reachable: true,
+      latencyMs: 0,
+      checkedAt: this.nowProvider(),
+    };
   }
 }
 
@@ -68,9 +76,28 @@ describe("runScanCycle", () => {
     expect(seeds.length).toBe(2);
 
     const heartbeats = store.debugHeartbeats();
-    expect(heartbeats[0]?.status).toBe("HEALTHY"); // started probe
-    expect(heartbeats.some((entry) => entry.status === "DOWN")).toBe(true);
-    expect(heartbeats.at(-1)?.status).toBe("HEALTHY");
+    // One row per run, not one per transition: the started probe and the
+    // completion update the same row, because scanner_health.runId is unique
+    // and listScannerRuns maps one row to one run. Two cycles ran here, so two
+    // rows -- previously this asserted three.
+    expect(heartbeats).toHaveLength(2);
+
+    expect(heartbeats[0]?.runId).toBe(down.runId);
+    expect(heartbeats[0]?.status).toBe("DOWN");
+    expect(heartbeats[0]?.startedAt).toBeInstanceOf(Date);
+    expect(heartbeats[0]?.finishedAt).toBeInstanceOf(Date);
+
+    expect(heartbeats[1]?.runId).toBe(up.runId);
+    expect(heartbeats[1]?.status).toBe("HEALTHY");
+    expect(heartbeats[1]?.startedAt).toBeInstanceOf(Date);
+    expect(heartbeats[1]?.finishedAt).toBeInstanceOf(Date);
+
+    // The invariant that let this divergence ship: this fake used to append a
+    // second row for the completion, which the database rejected with P2002. It
+    // now mirrors the real adapter and refuses an orphan completion.
+    await expect(
+      store.completeHeartbeat({ runId: "run-that-never-started", status: "DOWN" })
+    ).rejects.toThrow(/no in-flight heartbeat/);
 
     expect(up.collect.events).toBeGreaterThan(0);
     expect(up.collect.markets).toBeGreaterThan(0);
@@ -134,6 +161,94 @@ describe("createScanWorker", () => {
     tick();
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(worker.runCount()).toBe(afterStop);
+  });
+
+  it("nativeScheduler arms a one-shot timer, not a repeating one", async () => {
+    // The exact shape of the defect that shipped: schedule() was setInterval-based
+    // while the worker also rescheduled itself, so a single scheduled call fired
+    // repeatedly and every fire added another live timer. One call must fire once.
+    let calls = 0;
+    const handle = nativeScheduler().schedule(() => {
+      calls += 1;
+    }, 10);
+
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    handle.cancel();
+
+    expect(calls).toBe(1);
+  });
+
+  it("keeps one live timer and one in-flight cycle when a tick re-fires", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    const provider: OddsProvider = {
+      providerKey: "mock",
+      poll: async () => {
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        await gate;
+        concurrent -= 1;
+        return new MockProvider(() => NOW).poll();
+      },
+      health: async () => ({ provider: "mock", reachable: true, latencyMs: 0, checkedAt: NOW }),
+    };
+    const store = createMemoryWorkerStore(["mock"]);
+
+    const pending: Array<() => void> = [];
+    const schedule = {
+      schedule: (fn: () => void) => {
+        pending.push(fn);
+        return { cancel: () => {} };
+      },
+    };
+
+    const worker = createScanWorker({
+      deps: { provider, store },
+      intervalMs: 1000,
+      schedule,
+      immediate: false,
+    });
+
+    worker.start();
+    expect(pending).toHaveLength(1);
+
+    const first = pending[0]!;
+    first();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(worker.runCount()).toBe(1);
+    expect(maxConcurrent).toBe(1);
+
+    // A second live timer firing mid-cycle is what compounded in production. It
+    // must be dropped without arming a replacement: the running cycle owns the
+    // next timer, so the count stays at one instead of growing per re-fire.
+    first();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    first();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(maxConcurrent).toBe(1);
+    expect(worker.runCount()).toBe(1);
+    expect(pending).toHaveLength(1);
+
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Exactly one replacement timer, armed by the cycle that just finished.
+    expect(worker.runCount()).toBe(1);
+    expect(pending).toHaveLength(2);
+
+    pending[1]!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(worker.runCount()).toBe(2);
+    expect(maxConcurrent).toBe(1);
+    expect(pending).toHaveLength(3);
+
+    await worker.stop();
   });
 
   it("stop() waits for an in-flight cycle to finish", async () => {

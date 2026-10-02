@@ -70,7 +70,7 @@ describe("readiness probe memoisation", () => {
       () =>
         new Promise((resolve) => {
           release = () => resolve({ reachable: true, latencyMs: 1 });
-        }),
+        })
     );
 
     const pending = Promise.all([

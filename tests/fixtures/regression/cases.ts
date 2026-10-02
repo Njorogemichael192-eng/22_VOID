@@ -1,9 +1,4 @@
-import type {
-  MarketFamily,
-  OpportunityStatus,
-  Period,
-  RejectionReason,
-} from "@22void/domain";
+import type { MarketFamily, OpportunityStatus, Period, RejectionReason } from "@22void/domain";
 
 /**
  * Golden regression candidate cases (Phase 17 regression fixtures).
@@ -74,7 +69,10 @@ function freshProvenance(
   bookmaker: string,
   sourceUpdatedAt = FRESH,
   observedAt = FRESH_MS
-): Omit<RegressionLeg, "family" | "marketType" | "period" | "participant" | "line" | "outcome" | "odds"> {
+): Omit<
+  RegressionLeg,
+  "family" | "marketType" | "period" | "participant" | "line" | "outcome" | "odds"
+> {
   return {
     id,
     eventId,
@@ -427,7 +425,13 @@ export const regressionCases: RegressionCase[] = [
         odds: 2.1,
       },
       {
-        ...freshProvenance("k-under-25", EVENT_A, "book-b", "2026-09-20T10:00:00.000Z", Date.parse("2026-09-20T10:00:00.000Z")),
+        ...freshProvenance(
+          "k-under-25",
+          EVENT_A,
+          "book-b",
+          "2026-09-20T10:00:00.000Z",
+          Date.parse("2026-09-20T10:00:00.000Z")
+        ),
         family: "MATCH_TOTAL",
         marketType: "STANDARD",
         period: "FULL_MATCH",

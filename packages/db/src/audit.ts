@@ -49,7 +49,7 @@ export class AuditWriteError extends Error {
   constructor(
     message: string,
     readonly retryable: boolean,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown }
   ) {
     super(message, options);
     this.name = "AuditWriteError";
@@ -63,7 +63,7 @@ const DEFAULT_MAX_QUEUE_AGE_MS = 30_000;
 /** Reported when a row is shed so an operator can alert on it. */
 function warnShed(reason: string, action: string, extra: Record<string, unknown>): void {
   console.warn(
-    `[audit] dropped security audit row (${reason}) action=${action} ${JSON.stringify(extra)}`,
+    `[audit] dropped security audit row (${reason}) action=${action} ${JSON.stringify(extra)}`
   );
 }
 
@@ -84,7 +84,7 @@ function warnShed(reason: string, action: string, extra: Record<string, unknown>
  */
 export function createAuditQueue(
   write: (input: WriteAuditLogInput) => Promise<void>,
-  options: AuditQueueOptions = {},
+  options: AuditQueueOptions = {}
 ): {
   readonly enqueue: (input: WriteAuditLogInput) => void;
   readonly stats: () => AuditQueueStats;
@@ -196,7 +196,7 @@ export function createAuditQueue(
         if (!warnedThisDrain) {
           warnedThisDrain = true;
           console.warn(
-            `[audit] queue full (${maxQueueSize}); shedding security audit rows until it drains`,
+            `[audit] queue full (${maxQueueSize}); shedding security audit rows until it drains`
           );
         }
         return;
@@ -224,7 +224,7 @@ export function createAuditQueue(
  */
 export async function writeAuditLog(
   db: PrismaClient | Prisma.TransactionClient,
-  input: WriteAuditLogInput,
+  input: WriteAuditLogInput
 ): Promise<void> {
   await db.auditLog.create({
     data: {
@@ -247,7 +247,10 @@ export async function writeAuditLog(
  */
 export function enqueueAuditLog(
   db: PrismaClient | Prisma.TransactionClient,
-  options?: AuditQueueOptions,
-): { readonly enqueue: (input: WriteAuditLogInput) => void; readonly stats: () => AuditQueueStats } {
+  options?: AuditQueueOptions
+): {
+  readonly enqueue: (input: WriteAuditLogInput) => void;
+  readonly stats: () => AuditQueueStats;
+} {
   return createAuditQueue((input) => writeAuditLog(db, input), options);
 }

@@ -3,7 +3,12 @@ import {
   providerEnvelopeSchema,
   MockProvider,
 } from "@22void/provider-contracts";
-import { runDetection, createMemoryWorkerStore, runScanCycle, type WorkerStore } from "@22void/odds-collector";
+import {
+  runDetection,
+  createMemoryWorkerStore,
+  runScanCycle,
+  type WorkerStore,
+} from "@22void/odds-collector";
 import { describe, expect, it } from "vitest";
 
 const RECEIVED_AT = "2026-09-20T12:05:00.000Z";
@@ -63,7 +68,11 @@ async function persistFromEnvelope(_store: WorkerStore, provider: string, prices
 }
 
 /** Fold the canonical records into the store exactly like a scan cycle does. */
-async function ingest(store: WorkerStore, provider: string, records: Awaited<ReturnType<typeof persistFromEnvelope>>) {
+async function ingest(
+  store: WorkerStore,
+  provider: string,
+  records: Awaited<ReturnType<typeof persistFromEnvelope>>
+) {
   const { normalizeRun } = await import("@22void/odds-collector");
   const seeds = await store.loadEventSeeds();
   const output = normalizeRun(provider, records, seeds);

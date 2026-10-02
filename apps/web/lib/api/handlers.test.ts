@@ -254,7 +254,9 @@ function deps(calls: FakeCalls, overrides: Partial<HandlerDeps> = {}): HandlerDe
   return { repo: createFakeRepo(calls), env, ...overrides };
 }
 
-function episodeSummary(overrides: Partial<OpportunityEpisodeSummary> = {}): OpportunityEpisodeSummary {
+function episodeSummary(
+  overrides: Partial<OpportunityEpisodeSummary> = {}
+): OpportunityEpisodeSummary {
   return {
     id: "ep_1",
     eventCanonicalId: "canon-evt-1",
@@ -364,7 +366,10 @@ interface FakeHistoryCalls {
   requestedEpisodeId?: string | null;
 }
 
-function createFakeHistoryRepo(calls: FakeHistoryCalls, episodes: OpportunityEpisodeSummary[] = [episodeSummary()]): HistoryRepo {
+function createFakeHistoryRepo(
+  calls: FakeHistoryCalls,
+  episodes: OpportunityEpisodeSummary[] = [episodeSummary()]
+): HistoryRepo {
   return {
     async listEpisodes(filter) {
       calls.episodeFilter = filter;
@@ -391,7 +396,7 @@ function createFakeHistoryRepo(calls: FakeHistoryCalls, episodes: OpportunityEpi
 
 function historyDeps(
   calls: FakeHistoryCalls,
-  overrides: Partial<HistoryHandlerDeps> = {},
+  overrides: Partial<HistoryHandlerDeps> = {}
 ): HistoryHandlerDeps {
   return { repo: createFakeHistoryRepo(calls), env, ...overrides };
 }
@@ -412,7 +417,7 @@ describe("GET /api/v1/events", () => {
     const calls: FakeCalls = {};
     const response = await listEvents(
       get("http://test.local/api/v1/events?limit=5", READER_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as {
@@ -427,7 +432,7 @@ describe("GET /api/v1/events", () => {
     const calls: FakeCalls = {};
     await listEvents(
       get("http://test.local/api/v1/events?status=LIVE&competition=UCL&team=Team", READER_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(calls.eventFilter).toMatchObject({
       status: "LIVE",
@@ -443,9 +448,9 @@ describe("GET /api/v1/events", () => {
     await listEvents(
       get(
         "http://test.local/api/v1/events?startFrom=2026-10-01T00:00:00.000Z&startTo=2026-11-01T00:00:00.000Z",
-        READER_KEY,
+        READER_KEY
       ),
-      deps(calls),
+      deps(calls)
     );
     expect(calls.eventFilter?.startFrom).toBe("2026-10-01T00:00:00.000Z");
     expect(calls.eventFilter?.startTo).toBe("2026-11-01T00:00:00.000Z");
@@ -456,7 +461,7 @@ describe("GET /api/v1/events", () => {
     const cursor: Cursor = { value: "2026-10-01T19:00:00.000Z", direction: 1, id: "evt_1" };
     await listEvents(
       get(`http://test.local/api/v1/events?cursor=${encodeCursor(cursor)}`, READER_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(calls.eventFilter?.cursor).toEqual(cursor);
   });
@@ -464,7 +469,7 @@ describe("GET /api/v1/events", () => {
   it("rejects a malformed cursor with 400", async () => {
     const response = await listEvents(
       get("http://test.local/api/v1/events?cursor=not-a-cursor", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(400);
     expect(await body(response)).toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -473,7 +478,7 @@ describe("GET /api/v1/events", () => {
   it("rejects invalid query parameters with 400", async () => {
     const response = await listEvents(
       get("http://test.local/api/v1/events?limit=not-a-number", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(400);
     expect(await body(response)).toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -482,7 +487,7 @@ describe("GET /api/v1/events", () => {
   it("rejects an unknown event status value", async () => {
     const response = await listEvents(
       get("http://test.local/api/v1/events?status=NOT_A_STATUS", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(400);
   });
@@ -493,7 +498,7 @@ describe("GET /api/v1/events/:id", () => {
     const response = await getEvent(
       get("http://test.local/api/v1/events/evt_1", READER_KEY),
       deps({}),
-      "evt_1",
+      "evt_1"
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: EventView };
@@ -507,7 +512,7 @@ describe("GET /api/v1/events/:id", () => {
     const response = await getEvent(
       get("http://test.local/api/v1/events/missing", READER_KEY),
       deps({}),
-      "missing",
+      "missing"
     );
     expect(response.status).toBe(404);
     expect(await body(response)).toMatchObject({ error: { code: "NOT_FOUND" } });
@@ -518,8 +523,11 @@ describe("markets and odds", () => {
   it("lists markets and forwards an eventId filter", async () => {
     const calls: FakeCalls = {};
     const response = await listMarkets(
-      get("http://test.local/api/v1/markets?eventId=evt_1&family=MATCH_RESULT&period=FULL_MATCH", READER_KEY),
-      deps(calls),
+      get(
+        "http://test.local/api/v1/markets?eventId=evt_1&family=MATCH_RESULT&period=FULL_MATCH",
+        READER_KEY
+      ),
+      deps(calls)
     );
     expect(response.status).toBe(200);
     expect(calls.marketFilter).toMatchObject({ eventId: "evt_1", family: "MATCH_RESULT" });
@@ -529,7 +537,7 @@ describe("markets and odds", () => {
     const response = await getMarket(
       get("http://test.local/api/v1/markets/mkt_1", READER_KEY),
       deps({}),
-      "mkt_1",
+      "mkt_1"
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: MarketView };
@@ -540,7 +548,7 @@ describe("markets and odds", () => {
     const response = await getMarket(
       get("http://test.local/api/v1/markets/nope", READER_KEY),
       deps({}),
-      "nope",
+      "nope"
     );
     expect(response.status).toBe(404);
   });
@@ -549,7 +557,7 @@ describe("markets and odds", () => {
     const calls: FakeCalls = {};
     const response = await listOdds(
       get("http://test.local/api/v1/odds?bookmaker=Pinnacle&marketId=mkt_1", READER_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(response.status).toBe(200);
     expect(calls.oddsFilter).toMatchObject({ bookmaker: "Pinnacle", marketId: "mkt_1" });
@@ -561,7 +569,7 @@ describe("opportunities", () => {
     const calls: FakeCalls = {};
     const response = await listOpportunities(
       get("http://test.local/api/v1/opportunities?status=VERIFIED_ARB", READER_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: OpportunityView[] };
@@ -572,7 +580,7 @@ describe("opportunities", () => {
     const response = await getOpportunity(
       get("http://test.local/api/v1/opportunities/opp_1", READER_KEY),
       deps({}),
-      "opp_1",
+      "opp_1"
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: OpportunityView };
@@ -585,7 +593,7 @@ describe("opportunities", () => {
     const response = await getOpportunity(
       get("http://test.local/api/v1/opportunities/missing", READER_KEY),
       deps({}),
-      "missing",
+      "missing"
     );
     expect(response.status).toBe(404);
   });
@@ -657,7 +665,7 @@ describe("system endpoints", () => {
   it("lists providers with the reader key", async () => {
     const response = await listProviders(
       get("http://test.local/api/v1/providers", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: ProviderView[] };
@@ -694,7 +702,7 @@ describe("admin endpoints", () => {
   it("forbids the reader key with 403", async () => {
     const response = await listAdminSources(
       get("http://test.local/api/v1/admin/sources", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(403);
     expect(await body(response)).toMatchObject({ error: { code: "FORBIDDEN" } });
@@ -703,7 +711,7 @@ describe("admin endpoints", () => {
   it("allows the admin key and returns source counts", async () => {
     const response = await listAdminSources(
       get("http://test.local/api/v1/admin/sources", ADMIN_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: AdminSourceView[] };
@@ -714,7 +722,7 @@ describe("admin endpoints", () => {
     const calls: FakeCalls = {};
     const response = await listAuditLogs(
       get("http://test.local/api/v1/admin/audit-logs?entityType=opportunity", ADMIN_KEY),
-      deps(calls),
+      deps(calls)
     );
     expect(response.status).toBe(200);
     expect(calls.auditFilter).toMatchObject({ entityType: "opportunity", limit: 50 });
@@ -723,7 +731,7 @@ describe("admin endpoints", () => {
   it("forbids audit logs for the reader key", async () => {
     const response = await listAuditLogs(
       get("http://test.local/api/v1/admin/audit-logs", READER_KEY),
-      deps({}),
+      deps({})
     );
     expect(response.status).toBe(403);
   });
@@ -743,9 +751,9 @@ describe("history endpoints", () => {
     const response = await listEpisodes(
       get(
         "http://test.local/api/v1/history/opportunities?eventId=canon-evt-1&status=STALE&limit=5",
-        READER_KEY,
+        READER_KEY
       ),
-      historyDeps(calls),
+      historyDeps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: OpportunityEpisodeSummary[] };
@@ -759,7 +767,10 @@ describe("history endpoints", () => {
 
   it("defaults the episode list limit to 50", async () => {
     const calls: FakeHistoryCalls = {};
-    await listEpisodes(get("http://test.local/api/v1/history/opportunities", READER_KEY), historyDeps(calls));
+    await listEpisodes(
+      get("http://test.local/api/v1/history/opportunities", READER_KEY),
+      historyDeps(calls)
+    );
     expect(calls.episodeFilter).toMatchObject({ limit: 50 });
   });
 
@@ -767,7 +778,7 @@ describe("history endpoints", () => {
     const response = await getEpisodeReconstruction(
       get("http://test.local/api/v1/history/opportunities/ep_1", READER_KEY),
       historyDeps({}),
-      "ep_1",
+      "ep_1"
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: EpisodeReconstruction };
@@ -780,7 +791,7 @@ describe("history endpoints", () => {
     const response = await getEpisodeReconstruction(
       get("http://test.local/api/v1/history/opportunities/nope", READER_KEY),
       historyDeps({}),
-      "nope",
+      "nope"
     );
     expect(response.status).toBe(404);
   });
@@ -789,7 +800,7 @@ describe("history endpoints", () => {
     const response = await getEpisodeReconstruction(
       get("http://test.local/api/v1/history/opportunities/x", READER_KEY),
       historyDeps({}),
-      "x".repeat(65),
+      "x".repeat(65)
     );
     expect(response.status).toBe(400);
   });
@@ -797,7 +808,7 @@ describe("history endpoints", () => {
   it("requires selectionId or eventId for odds history", async () => {
     const response = await listOddsHistory(
       get("http://test.local/api/v1/history/odds", READER_KEY),
-      historyDeps({}),
+      historyDeps({})
     );
     expect(response.status).toBe(400);
     expect(await body(response)).toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -808,9 +819,9 @@ describe("history endpoints", () => {
     const response = await listOddsHistory(
       get(
         "http://test.local/api/v1/history/odds?selectionId=sel_1&from=2026-10-01T18:00:00.000Z&to=2026-10-01T19:00:00.000Z",
-        READER_KEY,
+        READER_KEY
       ),
-      historyDeps(calls),
+      historyDeps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: OddsHistoryPoint[] };
@@ -827,7 +838,7 @@ describe("history endpoints", () => {
     const calls: FakeHistoryCalls = {};
     const response = await listOddsHistory(
       get("http://test.local/api/v1/history/odds?eventId=canon-evt-1", READER_KEY),
-      historyDeps(calls),
+      historyDeps(calls)
     );
     expect(response.status).toBe(200);
     expect(calls.oddsFilter).toMatchObject({ eventCanonicalId: "canon-evt-1" });
@@ -837,7 +848,7 @@ describe("history endpoints", () => {
     const calls: FakeHistoryCalls = {};
     const response = await sourceLatency(
       get("http://test.local/api/v1/history/latency?sourceKey=pinnacle", READER_KEY),
-      historyDeps(calls),
+      historyDeps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: SourceLatencyStat[] };
@@ -849,7 +860,7 @@ describe("history endpoints", () => {
     const calls: FakeHistoryCalls = {};
     const response = await falsePositiveAnalysis(
       get("http://test.local/api/v1/history/analysis?after=2026-10-01T00:00:00.000Z", READER_KEY),
-      historyDeps(calls),
+      historyDeps(calls)
     );
     expect(response.status).toBe(200);
     const payload = (await body(response)) as { data: FalsePositiveReport };
@@ -917,22 +928,21 @@ describe("openapi contract", () => {
         "/history/odds",
         "/history/latency",
         "/history/analysis",
-      ]),
+      ])
     );
   });
 
   it("documents the apiKey security scheme", () => {
-    const scheme = (openApiDocument.components.securitySchemes as {
-      apiKey: { type: string; in: string; name: string };
-    }).apiKey;
+    const scheme = (
+      openApiDocument.components.securitySchemes as {
+        apiKey: { type: string; in: string; name: string };
+      }
+    ).apiKey;
     expect(scheme).toMatchObject({ type: "apiKey", in: "header", name: "x-api-key" });
   });
 
   it("advertises the Phase 11 verified status", () => {
-    const schemas = openApiDocument.components.schemas as Record<
-      string,
-      { enum?: string[] }
-    >;
+    const schemas = openApiDocument.components.schemas as Record<string, { enum?: string[] }>;
     const status = schemas.OpportunityStatus?.enum ?? [];
     expect(status).toContain("VERIFIED_ARB");
     expect(status).toContain("THEORETICAL_ARB");

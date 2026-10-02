@@ -82,10 +82,7 @@ const PROVIDER_PATTERNS: Pattern[] = [
   },
   {
     name: "provider API key named as ParlayAPI key in prose",
-    re: new RegExp(
-      `\\bParlay[\\s_-]?API[\\s_-]?key\\b${KEY_VALUE_GAP}([A-Za-z0-9]{24,})\\b`,
-      "gi"
-    ),
+    re: new RegExp(`\\bParlay[\\s_-]?API[\\s_-]?key\\b${KEY_VALUE_GAP}([A-Za-z0-9]{24,})\\b`, "gi"),
   },
   {
     name: "provider API key named as Odds API key in prose",
@@ -211,16 +208,8 @@ function runSelfTest(): void {
       "near PARLAY_API_KEY",
     ],
     ["ODDS_API_KEY is", `ODDS_API_KEY is \`${secret}\``, "near ODDS_API_KEY"],
-    [
-      "The Odds API key",
-      `The Odds API key (\`${secret}\`) was leaked.`,
-      "Odds API key in prose",
-    ],
-    [
-      "ODDS_API_KEY=",
-      `ODDS_API_KEY=\`${secret}\` was pasted into a log.`,
-      "near ODDS_API_KEY",
-    ],
+    ["The Odds API key", `The Odds API key (\`${secret}\`) was leaked.`, "Odds API key in prose"],
+    ["ODDS_API_KEY=", `ODDS_API_KEY=\`${secret}\` was pasted into a log.`, "near ODDS_API_KEY"],
   ];
   for (const [label, line, expectedReason] of cases) {
     const findings = scanContent("self-test", line);
@@ -228,7 +217,9 @@ function runSelfTest(): void {
       throw new Error(`[secret-scan] SELF-TEST FAIL — provider detection for ${label}`);
     }
     if (JSON.stringify(findings).includes(secret)) {
-      throw new Error(`[secret-scan] SELF-TEST FAIL — provider value was not redacted for ${label}`);
+      throw new Error(
+        `[secret-scan] SELF-TEST FAIL — provider value was not redacted for ${label}`
+      );
     }
   }
 

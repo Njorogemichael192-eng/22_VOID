@@ -60,12 +60,7 @@ export function resetGuardAuditThrottle(): void {
  * `now` is passed in rather than read from the clock so callers driving a fake
  * clock in tests get the same behaviour they would get in production.
  */
-function shouldAuditThrottled(
-  ip: string,
-  action: string,
-  at: number,
-  intervalMs: number,
-): boolean {
+function shouldAuditThrottled(ip: string, action: string, at: number, intervalMs: number): boolean {
   if (intervalMs <= 0) return true;
   const key = `${action}|${ip}`;
   const lastAuditedAt = unauthenticatedAuditedAt.get(key);
@@ -101,7 +96,7 @@ export type GuardResult = Response | GuardOk;
 export function guardRequest(
   request: Request,
   deps: { env: ApiAuthEnv; security?: SecurityDeps },
-  required: ApiRole = "reader",
+  required: ApiRole = "reader"
 ): GuardResult {
   const security: SecurityDeps = deps.security ?? {};
   const audit = security.audit ?? nullAudit;
@@ -112,16 +107,14 @@ export function guardRequest(
   const ip = clientIp(request);
   const path = new URL(request.url).pathname;
 
-  const limiter =
-    security.rateLimiter ??
-    new ApiRateLimiter({ capacity: 120, refillPerSecond: 2 });
+  const limiter = security.rateLimiter ?? new ApiRateLimiter({ capacity: 120, refillPerSecond: 2 });
   const limit = limiter.consume(`ip:${ip}`);
   if (!limit.allowed) {
     const response = jsonError(
       "RATE_LIMITED",
       "Too many requests. Retry after the advertised interval.",
       429,
-      { retryAfterMs: limit.retryAfterMs },
+      { retryAfterMs: limit.retryAfterMs }
     );
     response.headers.set("retry-after", String(Math.ceil(limit.retryAfterMs / 1000)));
     if (shouldAuditThrottled(ip, "RATE_LIMITED", now(), auditThrottleMs)) {
@@ -145,7 +138,7 @@ export function guardRequest(
     const response = jsonError(
       "METHOD_NOT_ALLOWED",
       `This endpoint only supports ${methods.join(", ")}.`,
-      405,
+      405
     );
     response.headers.set("allow", methods.join(", "));
     if (authenticated) {
@@ -164,7 +157,7 @@ export function guardRequest(
       const response = jsonError(
         "PAYLOAD_TOO_LARGE",
         `Request body exceeds the ${maxBodyBytes} byte limit.`,
-        413,
+        413
       );
       // Same gate as the method check: an unauthenticated flood must not be able
       // to reach the audit port by sending a body instead of relying on 405.
@@ -180,7 +173,7 @@ export function guardRequest(
     const response = jsonError(
       "REQUEST_BODY_NOT_ALLOWED",
       "The API is read-only; requests must not carry a body.",
-      400,
+      400
     );
     if (authenticated) {
       void audit.record({ action: "REQUEST_BODY_NOT_ALLOWED", actor: ip });
@@ -192,8 +185,8 @@ export function guardRequest(
     const keyPresent = request.headers.get("x-api-key") !== null;
     const response = jsonError(
       "UNAUTHORIZED",
-      "Missing or invalid API key. Send it in the \"x-api-key\" header.",
-      401,
+      'Missing or invalid API key. Send it in the "x-api-key" header.',
+      401
     );
     if (shouldAuditThrottled(ip, "AUTH_FAILED", now(), auditThrottleMs)) {
       void audit.record({

@@ -1,4 +1,10 @@
-import { EventStatus, MarketFamily, MarketType, Period, type MarketStructure } from "@22void/domain";
+import {
+  EventStatus,
+  MarketFamily,
+  MarketType,
+  Period,
+  type MarketStructure,
+} from "@22void/domain";
 import {
   envelopeToCanonicalRecords,
   ODDS_API_MARKET_KEYS,
@@ -26,7 +32,9 @@ describe("Phase 17 provider-fixture regression: odds-api translation fixture", (
     );
     expect(translated.events).toHaveLength(2);
     // player_goals_anytime is intentionally unregistered → skipped, never guessed.
-    expect(translated.skippedOutcomes.some((skip) => skip.includes("player_goals_anytime"))).toBe(true);
+    expect(translated.skippedOutcomes.some((skip) => skip.includes("player_goals_anytime"))).toBe(
+      true
+    );
 
     const envelope = providerEnvelopeSchema.parse(translated);
     expect(envelope.events).toHaveLength(2);
@@ -66,8 +74,7 @@ describe("Phase 17 provider-fixture regression: odds-api translation fixture", (
     }
     const totalsOver = records.selections.find(
       (selection) =>
-        selection.market.family === MarketFamily.MATCH_TOTAL &&
-        selection.outcome === "OVER"
+        selection.market.family === MarketFamily.MATCH_TOTAL && selection.outcome === "OVER"
     );
     expect(totalsOver?.market.line).toBe("2.5");
   });
@@ -131,15 +138,18 @@ describe("Phase 17 provider-fixture regression: market normalization golden tabl
       return;
     }
     const resolution = result.resolution!;
-    if (entry.expected.family !== undefined) expect(resolution.family, entry.id).toBe(entry.expected.family);
-    if (entry.expected.period !== undefined) expect(resolution.period, entry.id).toBe(entry.expected.period);
+    if (entry.expected.family !== undefined)
+      expect(resolution.family, entry.id).toBe(entry.expected.family);
+    if (entry.expected.period !== undefined)
+      expect(resolution.period, entry.id).toBe(entry.expected.period);
     if (entry.expected.marketType !== undefined) {
       expect(resolution.marketType, entry.id).toBe(entry.expected.marketType);
     }
     if (entry.expected.participant !== undefined) {
       expect(resolution.participant, entry.id).toBe(entry.expected.participant);
     }
-    if (entry.expected.line !== undefined) expect(resolution.line, entry.id).toBe(entry.expected.line);
+    if (entry.expected.line !== undefined)
+      expect(resolution.line, entry.id).toBe(entry.expected.line);
     if (entry.expected.via !== undefined) expect(resolution.via, entry.id).toBe(entry.expected.via);
   });
 

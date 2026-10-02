@@ -9,10 +9,7 @@ import {
 } from "@22void/arbitrage";
 import { describe, expect, it } from "vitest";
 
-import {
-  regressionCases,
-  type RegressionCase,
-} from "../../../tests/fixtures/regression/index.js";
+import { regressionCases, type RegressionCase } from "../../../tests/fixtures/regression/index.js";
 import { referenceNow, toArbitrageLeg, toPricedSelection } from "./helpers.js";
 
 const EGRESS_OPTIONS = {
@@ -42,18 +39,24 @@ describe("Phase 17 false-arb regression: structural classification", () => {
   });
 
   it("the whole-line complement of CASE_01 is a standard complement", () => {
-    const entry = regressionCases.find((candidate) => candidate.id === "CASE_01_STANDARD_COMPLEMENT")!;
+    const entry = regressionCases.find(
+      (candidate) => candidate.id === "CASE_01_STANDARD_COMPLEMENT"
+    )!;
     expect(isStandardComplement(entry.legs.map(toArbitrageLeg))).toBe(true);
   });
 
   it("the generator never merges events within a candidate", () => {
-    const entry = regressionCases.find((candidate) => candidate.id === "CASE_12_MISMATCHED_EVENTS")!;
+    const entry = regressionCases.find(
+      (candidate) => candidate.id === "CASE_12_MISMATCHED_EVENTS"
+    )!;
     const generated = generateCandidates(entry.legs.map(toPricedSelection));
     expect(generated).toHaveLength(0);
   });
 
   it("a hand-forged cross-event candidate is pruned with EVENT_MISMATCH", () => {
-    const entry = regressionCases.find((candidate) => candidate.id === "CASE_12_MISMATCHED_EVENTS")!;
+    const entry = regressionCases.find(
+      (candidate) => candidate.id === "CASE_12_MISMATCHED_EVENTS"
+    )!;
     const legs = entry.legs.map(toPricedSelection);
     const forged: Candidate = {
       id: "forged|mismatch",

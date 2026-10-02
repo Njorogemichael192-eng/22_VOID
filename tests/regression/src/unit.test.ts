@@ -53,9 +53,7 @@ describe("Phase 17 unit regression: settlement payout formulas (§10)", () => {
     };
     const partsWin = componentPayouts(halfWin, 100, 1.8);
     expect(partsWin).toEqual([90, 50]);
-    expect(partsWin.reduce((sum, value) => sum + value, 0)).toBe(
-      payout(100, 1.8, "HALF_WIN")
-    );
+    expect(partsWin.reduce((sum, value) => sum + value, 0)).toBe(payout(100, 1.8, "HALF_WIN"));
   });
 
   it("every golden settlement row reproduces its expected multiplier", () => {

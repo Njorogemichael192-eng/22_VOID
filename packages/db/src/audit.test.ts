@@ -58,9 +58,12 @@ describe("createAuditQueue", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const queue = createAuditQueue(async () => {
-      await gate;
-    }, { maxQueueSize: 50, maxQueueAgeMs: 1 });
+    const queue = createAuditQueue(
+      async () => {
+        await gate;
+      },
+      { maxQueueSize: 50, maxQueueAgeMs: 1 }
+    );
 
     queue.enqueue({ action: "FIRST" });
     queue.enqueue({ action: "SECOND" });
@@ -80,7 +83,7 @@ describe("createAuditQueue", () => {
         attempts += 1;
         throw new AuditWriteError("database is down", true);
       },
-      { maxQueueSize: 5, maxQueueAgeMs: 10_000 },
+      { maxQueueSize: 5, maxQueueAgeMs: 10_000 }
     );
 
     queue.enqueue({ action: "AUTH_FAILED" });
@@ -102,7 +105,7 @@ describe("createAuditQueue", () => {
         attempts += 1;
         throw new AuditWriteError("value too long for column", false);
       },
-      { maxQueueSize: 10, maxQueueAgeMs: 10_000 },
+      { maxQueueSize: 10, maxQueueAgeMs: 10_000 }
     );
 
     queue.enqueue({ action: "AUTH_FAILED" });

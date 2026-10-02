@@ -120,7 +120,7 @@ function parseAddress(raw: string): ParsedAddress | undefined {
  * would deny a legitimate local healthcheck.
  */
 function embeddedIpv4(value: bigint): bigint | undefined {
-  if ((value >> 32n) !== 0xffffn) return undefined;
+  if (value >> 32n !== 0xffffn) return undefined;
   return value & 0xffffffffn;
 }
 
@@ -149,7 +149,7 @@ function addressInCidr(address: ParsedAddress, cidr: ParsedCidr): boolean {
   const totalBits = cidr.family === 4 ? 32 : 128;
   if (cidr.prefixBits === 0) return true;
   const shift = BigInt(totalBits - cidr.prefixBits);
-  return (address.value >> shift) === (cidr.address >> shift);
+  return address.value >> shift === cidr.address >> shift;
 }
 
 /** True when `ip` falls inside any of the comma or space separated `cidrs`. */
@@ -234,10 +234,7 @@ function resolveAllowlist(allowlist?: string): readonly string[] {
  * typo must not take the endpoint down, but it also must not silently widen the
  * allowlist, so the decision reports what it applied.
  */
-export function checkInternalOnly(
-  request: Request,
-  allowlist?: string,
-): InternalOnlyDecision {
+export function checkInternalOnly(request: Request, allowlist?: string): InternalOnlyDecision {
   const cidrs = resolveAllowlist(allowlist);
   if (cidrs.includes(ALLOW_ALL)) {
     return { allowed: true, reason: "restriction disabled by allowlist", cidrs };
