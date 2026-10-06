@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_SCANNER_POLL_INTERVAL_MS,
+  DEFAULT_WORKER_STALENESS_MS,
+  assertIntervalWithinStaleness,
   resolveHealthConfig,
   resolveProviderConfig,
+  resolveScanIntervalMs,
   resolveStoreConfig,
   resolveWorkerConfig,
 } from "./config.js";
 
 const productionDatabaseUrl = "postgresql://worker:password@localhost:5432/void";
+const liveProviderEnv = {
+  NODE_ENV: "production",
+  WORKER_PROVIDER: "odds-api",
+  ODDS_API_KEY: "k".repeat(32),
+  DATABASE_URL: productionDatabaseUrl,
+} as const;
 
 describe("worker configuration", () => {
   it("retains mock and memory defaults outside production", () => {
@@ -254,5 +264,146 @@ describe("worker configuration", () => {
         WORKER_STALENESS_MS: "2500",
       })
     ).toEqual({ startupGraceMs: 1000, staleAfterMs: 2500 });
+  });
+});
+
+/**
+ * Regions, markets and sport determine the credit cost of every poll
+ * (cost = markets x regions), so a knob that silently does nothing is a billing
+ * defect, not a cosmetic one. These pin that the resolver actually honours them.
+ */
+describe("provider request selection", () => {
+  it("defaults to no request selection, deferring to the adapter", () => {
+    // Unset must stay unset rather than being defaulted here: the adapter owns
+    // these defaults, and duplicating them in config would let the two drift.
+    expect(resolveProviderConfig(liveProviderEnv)).toEqual({
+      kind: "odds-api",
+      config: { apiKey: "k".repeat(32) },
+    });
+  });
+
+  it("honours ODDS_API_MARKETS, ODDS_API_REGIONS and ODDS_API_SPORT", () => {
+    const resolved = resolveProviderConfig({
+      ...liveProviderEnv,
+      ODDS_API_MARKETS: "h2h",
+      ODDS_API_REGIONS: "uk",
+      ODDS_API_SPORT: "soccer_spain_la_liga",
+    });
+    expect(resolved).toEqual({
+      kind: "odds-api",
+      config: {
+        apiKey: "k".repeat(32),
+        markets: "h2h",
+        regions: "uk",
+        defaultSportKey: "soccer_spain_la_liga",
+      },
+    });
+  });
+
+  it("passes multi-value comma lists through verbatim", () => {
+    // No sorting or de-duplication: the provider charges per region asked for, so
+    // rewriting the list here would change the bill in a way the operator did not
+    // ask for.
+    const resolved = resolveProviderConfig({
+      ...liveProviderEnv,
+      ODDS_API_REGIONS: "uk,eu,au",
+      ODDS_API_MARKETS: "h2h,spreads,totals",
+    });
+    expect(resolved).toMatchObject({
+      config: { regions: "uk,eu,au", markets: "h2h,spreads,totals" },
+    });
+  });
+
+  it("rejects an empty request selection in production", () => {
+    // Empty is how a commented-out or half-written env line usually arrives.
+    // Silently treating it as "unset" would bill the adapter defaults while the
+    // operator believed they had narrowed the request.
+    expect(() => resolveProviderConfig({ ...liveProviderEnv, ODDS_API_MARKETS: "" })).toThrow(
+      /ODDS_API_MARKETS/
+    );
+    expect(() => resolveProviderConfig({ ...liveProviderEnv, ODDS_API_REGIONS: "" })).toThrow(
+      /ODDS_API_REGIONS/
+    );
+    expect(() => resolveProviderConfig({ ...liveProviderEnv, ODDS_API_SPORT: "" })).toThrow(
+      /ODDS_API_SPORT/
+    );
+  });
+});
+
+/**
+ * The poll interval and the health staleness ceiling are one setting. Raising the
+ * interval to conserve provider quota is a legitimate, expected operation - and
+ * without this guard it produces a container that is permanently unhealthy while
+ * every log line says the worker is fine.
+ */
+describe("poll interval vs health staleness", () => {
+  it("defaults the interval and the ceiling to their documented values", () => {
+    expect(resolveScanIntervalMs({})).toBe(DEFAULT_SCANNER_POLL_INTERVAL_MS);
+    expect(resolveScanIntervalMs({})).toBe(15_000);
+    expect(resolveHealthConfig({}).staleAfterMs).toBe(DEFAULT_WORKER_STALENESS_MS);
+    expect(resolveHealthConfig({}).staleAfterMs).toBe(300_000);
+  });
+
+  it("accepts the shipped defaults, which are interval < ceiling", () => {
+    expect(() =>
+      assertIntervalWithinStaleness({
+        intervalMs: resolveScanIntervalMs({}),
+        staleAfterMs: resolveHealthConfig({}).staleAfterMs,
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses the shipped quota-safe pair from the runbook", () => {
+    // 90 min interval with a 3 h ceiling is the documented 7-day-free-quota
+    // configuration. It must start.
+    expect(() =>
+      assertIntervalWithinStaleness({ intervalMs: 5_400_000, staleAfterMs: 10_800_000 })
+    ).not.toThrow();
+  });
+
+  it("refuses an interval above the ceiling and names both values", () => {
+    expect(() =>
+      assertIntervalWithinStaleness({
+        intervalMs: 99_999_999,
+        staleAfterMs: DEFAULT_WORKER_STALENESS_MS,
+      })
+    ).toThrow(/SCANNER_POLL_INTERVAL_MS=99999999 exceeds WORKER_STALENESS_MS=300000/);
+  });
+
+  it("explains the consequence rather than just the mismatch", () => {
+    // The message is the only thing an operator sees at 3am; it has to say why.
+    expect(() =>
+      assertIntervalWithinStaleness({ intervalMs: 99_999_999, staleAfterMs: 300_000 })
+    ).toThrow(/stale/i);
+    expect(() =>
+      assertIntervalWithinStaleness({ intervalMs: 99_999_999, staleAfterMs: 300_000 })
+    ).toThrow(/Raise WORKER_STALENESS_MS above SCANNER_POLL_INTERVAL_MS/);
+  });
+
+  it("allows equality, since only a strictly greater interval is incoherent", () => {
+    expect(() =>
+      assertIntervalWithinStaleness({ intervalMs: 300_000, staleAfterMs: 300_000 })
+    ).not.toThrow();
+  });
+
+  it("allows an interval below the ceiling", () => {
+    expect(() =>
+      assertIntervalWithinStaleness({ intervalMs: 60_000, staleAfterMs: 300_000 })
+    ).not.toThrow();
+  });
+
+  it("rejects a malformed interval", () => {
+    expect(() => resolveScanIntervalMs({ SCANNER_POLL_INTERVAL_MS: "0" })).toThrow(
+      /SCANNER_POLL_INTERVAL_MS/
+    );
+    expect(() => resolveScanIntervalMs({ SCANNER_POLL_INTERVAL_MS: "-5" })).toThrow(
+      /SCANNER_POLL_INTERVAL_MS/
+    );
+    expect(() => resolveScanIntervalMs({ SCANNER_POLL_INTERVAL_MS: "" })).toThrow(
+      /SCANNER_POLL_INTERVAL_MS/
+    );
+    expect(() => resolveScanIntervalMs({ SCANNER_POLL_INTERVAL_MS: "soon" })).toThrow(
+      /SCANNER_POLL_INTERVAL_MS/
+    );
   });
 });

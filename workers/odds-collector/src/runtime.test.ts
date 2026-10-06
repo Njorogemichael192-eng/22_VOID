@@ -3,6 +3,7 @@ import {
   ProviderTransportError,
   type OddsProvider,
   type PollResult,
+  type ProviderQuota,
 } from "@22void/provider-contracts";
 import { describe, expect, it } from "vitest";
 
@@ -280,5 +281,99 @@ describe("createScanWorker", () => {
     await stopping;
     expect(settled).toBe(true);
     expect(worker.runCount()).toBe(1);
+  });
+});
+
+/**
+ * The worker is the only component that can see quota in the context of a cycle,
+ * so it has to carry the reading out to the log. Two properties matter: it is
+ * present on failures (an exhausted plan looks identical to a bad key otherwise),
+ * and it never invents a number.
+ */
+describe("runScanCycle quota reporting", () => {
+  /** Mock provider with a controllable quota reading. */
+  function providerReporting(quota: ProviderQuota | undefined): OddsProvider {
+    return {
+      providerKey: "mock",
+      quotaSnapshot: () => quota,
+      poll: () => new MockProvider(() => NOW).poll(),
+      health: async () => ({
+        provider: "mock",
+        reachable: true,
+        latencyMs: 0,
+        checkedAt: NOW,
+      }),
+    };
+  }
+
+  /** Provider that always fails, the way an exhausted plan looks. */
+  function failingProviderReporting(quota: ProviderQuota | undefined): OddsProvider {
+    return {
+      providerKey: "mock",
+      quotaSnapshot: () => quota,
+      poll: async () => {
+        throw new ProviderTransportError("401 unauthorized", { status: 401 });
+      },
+      health: async () => ({
+        provider: "mock",
+        reachable: true,
+        latencyMs: 0,
+        checkedAt: NOW,
+      }),
+    };
+  }
+
+  it("carries the balance out on a successful cycle", async () => {
+    const provider = providerReporting({ remaining: 487, used: 13, last: 4 });
+    const store = createMemoryWorkerStore(["mock"]);
+
+    const result = await runScanCycle({ provider, store, ...immediateRetry });
+
+    expect(result.status).toBe("OK");
+    expect(result.quota).toEqual({ remaining: 487, used: 13, last: 4 });
+  });
+
+  it("carries the balance out on a failed cycle, which is the whole point", async () => {
+    // All three slots are always present; `undefined` means "the provider did not
+    // report it", which is why the exhausted case below shows `last: undefined`
+    // rather than a guessed per-call cost.
+    const provider = failingProviderReporting({ remaining: 0, used: 500, last: undefined });
+    const store = createMemoryWorkerStore(["mock"]);
+
+    const result = await runScanCycle({ provider, store, ...immediateRetry });
+
+    expect(result.status).toBe("DOWN");
+    // remaining=0 on a 401 is the difference between "plan exhausted, raise the
+    // interval" and "the key is wrong" - same status, opposite response.
+    expect(result.quota).toEqual({ remaining: 0, used: 500, last: undefined });
+  });
+
+  it("reports null, not a fabricated zero, when the provider reports nothing", async () => {
+    const provider = providerReporting(undefined);
+    const store = createMemoryWorkerStore(["mock"]);
+
+    const result = await runScanCycle({ provider, store, ...immediateRetry });
+
+    // A zero here would read as "out of quota" for the mock provider, which is
+    // both false and alarming.
+    expect(result.quota).toBeNull();
+  });
+
+  it("tolerates a provider with no quota capability at all", async () => {
+    const provider: OddsProvider = {
+      providerKey: "mock",
+      poll: () => new MockProvider(() => NOW).poll(),
+      health: async () => ({
+        provider: "mock",
+        reachable: true,
+        latencyMs: 0,
+        checkedAt: NOW,
+      }),
+    };
+    const store = createMemoryWorkerStore(["mock"]);
+
+    const result = await runScanCycle({ provider, store, ...immediateRetry });
+
+    expect(result.quota).toBeNull();
   });
 });

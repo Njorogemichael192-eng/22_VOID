@@ -4,6 +4,7 @@ import { providerEnvelopeSchema } from "./envelope";
 import type { ProviderHealth } from "./envelope";
 import { providerKeySchema } from "./provider-id";
 import type { ProviderKey } from "./provider-id";
+import type { ProviderQuota } from "./providers/http";
 
 /**
  * OddsProvider contract (BUILD_AGENT_PROMPT Phase 3).
@@ -48,6 +49,17 @@ export interface OddsProvider {
   poll(request?: PollRequest): Promise<PollResult>;
   /** Lightweight reachability/latency probe for the scanner heartbeat. */
   health(): Promise<ProviderHealth>;
+  /**
+   * Credit/quota accounting from the most recent HTTP response, when the provider
+   * reports it.
+   *
+   * Optional and expected to be absent for providers with no quota model (the
+   * mock provider invents prices and bills nothing). Present because a paid,
+   * metered provider with no balance visibility is the failure mode this exists
+   * to prevent: you cannot manage a budget you cannot read, and an exhausted one
+   * is otherwise indistinguishable from a bad key.
+   */
+  quotaSnapshot?(): ProviderQuota | undefined;
 }
 
 /** Creates a new request id for a capture run. */

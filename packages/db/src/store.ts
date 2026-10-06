@@ -240,158 +240,161 @@ export async function persistCanonicalRun(
   const invalid = [...(input.invalid ?? [])];
   const source = await ensureOddsSource(db, input.provider);
 
-  return db.$transaction(async (tx) => {
-    const eventByCanonicalId = new Map<string, string>();
-    let events = 0;
-    let markets = 0;
-    let selections = 0;
-    let observations = 0;
+  return db.$transaction(
+    async (tx) => {
+      const eventByCanonicalId = new Map<string, string>();
+      let events = 0;
+      let markets = 0;
+      let selections = 0;
+      let observations = 0;
 
-    for (const event of input.events) {
-      const existing = await tx.event.findUnique({
-        where: { canonicalEventId: event.canonicalEventId },
-      });
-      if (existing === null) {
-        await tx.event.create({
-          data: {
-            canonicalEventId: event.canonicalEventId,
-            sport: event.sport ?? "football",
-            competition: event.competition,
+      for (const event of input.events) {
+        const existing = await tx.event.findUnique({
+          where: { canonicalEventId: event.canonicalEventId },
+        });
+        if (existing === null) {
+          await tx.event.create({
+            data: {
+              canonicalEventId: event.canonicalEventId,
+              sport: event.sport ?? "football",
+              competition: event.competition,
+              homeTeam: event.homeTeam,
+              awayTeam: event.awayTeam,
+              startTime: new Date(event.startTime),
+              status: event.status,
+            },
+          });
+        } else {
+          await tx.event.update({
+            where: { id: existing.id },
+            data: {
+              sport: event.sport ?? existing.sport,
+              competition: event.competition,
+              homeTeam: event.homeTeam,
+              awayTeam: event.awayTeam,
+              startTime: new Date(event.startTime),
+              status: event.status,
+            },
+          });
+        }
+        const created = await tx.event.findUnique({
+          where: { canonicalEventId: event.canonicalEventId },
+          select: { id: true },
+        });
+        if (created === null) {
+          invalid.push({
+            ref: event.canonicalEventId,
+            reason: "event could not be resolved after upsert",
+          });
+          continue;
+        }
+        eventByCanonicalId.set(event.canonicalEventId, created.id);
+        events += 1;
+
+        for (const ref of event.sources) {
+          const sourceRef = await ensureOddsSource(tx, ref.provider);
+          const data = {
+            eventId: created.id,
+            oddsSourceId: sourceRef.id,
+            sourceEventId: ref.sourceEventId,
+            startTime: new Date(event.startTime),
             homeTeam: event.homeTeam,
             awayTeam: event.awayTeam,
-            startTime: new Date(event.startTime),
-            status: event.status,
-          },
-        });
-      } else {
-        await tx.event.update({
-          where: { id: existing.id },
-          data: {
-            sport: event.sport ?? existing.sport,
             competition: event.competition,
-            homeTeam: event.homeTeam,
-            awayTeam: event.awayTeam,
-            startTime: new Date(event.startTime),
-            status: event.status,
-          },
-        });
+            ...(ref.eventConfidence !== undefined ? { eventConfidence: ref.eventConfidence } : {}),
+          };
+          await tx.sourceEventId.upsert({
+            where: {
+              oddsSourceId_sourceEventId: {
+                oddsSourceId: sourceRef.id,
+                sourceEventId: ref.sourceEventId,
+              },
+            },
+            update: data,
+            create: data,
+          });
+        }
       }
-      const created = await tx.event.findUnique({
-        where: { canonicalEventId: event.canonicalEventId },
-        select: { id: true },
-      });
-      if (created === null) {
-        invalid.push({
-          ref: event.canonicalEventId,
-          reason: "event could not be resolved after upsert",
-        });
-        continue;
-      }
-      eventByCanonicalId.set(event.canonicalEventId, created.id);
-      events += 1;
 
-      for (const ref of event.sources) {
-        const sourceRef = await ensureOddsSource(tx, ref.provider);
-        const data = {
-          eventId: created.id,
-          oddsSourceId: sourceRef.id,
-          sourceEventId: ref.sourceEventId,
-          startTime: new Date(event.startTime),
-          homeTeam: event.homeTeam,
-          awayTeam: event.awayTeam,
-          competition: event.competition,
-          ...(ref.eventConfidence !== undefined ? { eventConfidence: ref.eventConfidence } : {}),
-        };
-        await tx.sourceEventId.upsert({
+      const ruleByKey = new Map<string, string>();
+      const marketBySourceKey = new Map<string, Market>();
+      for (const market of input.markets) {
+        const eventId = eventByCanonicalId.get(market.eventCanonicalId);
+        if (eventId === undefined) {
+          invalid.push({
+            ref: market.sourceMarketId,
+            reason: `unknown event ${market.eventCanonicalId}`,
+          });
+          continue;
+        }
+        const ruleKey = `${market.family}|${market.marketType}`;
+        let ruleId = ruleByKey.get(ruleKey);
+        if (ruleId === undefined) {
+          ruleId = await ensureSettlementRule(
+            tx,
+            source.id,
+            market.family,
+            market.marketType,
+            source.key
+          );
+          ruleByKey.set(ruleKey, ruleId);
+        }
+        const existing = await tx.market.findUnique({
           where: {
-            oddsSourceId_sourceEventId: {
-              oddsSourceId: sourceRef.id,
-              sourceEventId: ref.sourceEventId,
+            oddsSourceId_sourceMarketId: {
+              oddsSourceId: source.id,
+              sourceMarketId: market.sourceMarketId,
             },
           },
-          update: data,
-          create: data,
         });
+        const data = {
+          eventId,
+          oddsSourceId: source.id,
+          sourceMarketId: market.sourceMarketId,
+          settlementRuleId: ruleId,
+          period: market.period,
+          family: market.family,
+          marketType: market.marketType,
+          ...(market.participant !== undefined && market.participant !== null
+            ? { participant: market.participant }
+            : {}),
+          ...(market.line !== undefined && market.line !== null ? { line: market.line } : {}),
+        };
+        let row: Market;
+        if (existing === null) {
+          row = await tx.market.create({ data });
+        } else {
+          row = await tx.market.update({ where: { id: existing.id }, data });
+        }
+        marketBySourceKey.set(market.sourceMarketId, row);
+        markets += 1;
       }
-    }
 
-    const ruleByKey = new Map<string, string>();
-    const marketBySourceKey = new Map<string, Market>();
-    for (const market of input.markets) {
-      const eventId = eventByCanonicalId.get(market.eventCanonicalId);
-      if (eventId === undefined) {
-        invalid.push({
-          ref: market.sourceMarketId,
-          reason: `unknown event ${market.eventCanonicalId}`,
-        });
-        continue;
+      for (const selection of input.selections) {
+        const market = marketBySourceKey.get(selection.sourceMarketId);
+        if (market === undefined) {
+          invalid.push({
+            ref: selection.bookmaker,
+            reason: `unknown market ${selection.sourceMarketId}`,
+          });
+          continue;
+        }
+        const result = await upsertSelection(tx, selection, market);
+        if (result === null) {
+          invalid.push({
+            ref: selection.bookmaker,
+            reason: `outcome "${selection.outcome}" is not representable in the DB enum`,
+          });
+          continue;
+        }
+        selections += 1;
+        if (result.created || result.changed) observations += 1;
       }
-      const ruleKey = `${market.family}|${market.marketType}`;
-      let ruleId = ruleByKey.get(ruleKey);
-      if (ruleId === undefined) {
-        ruleId = await ensureSettlementRule(
-          tx,
-          source.id,
-          market.family,
-          market.marketType,
-          source.key
-        );
-        ruleByKey.set(ruleKey, ruleId);
-      }
-      const existing = await tx.market.findUnique({
-        where: {
-          oddsSourceId_sourceMarketId: {
-            oddsSourceId: source.id,
-            sourceMarketId: market.sourceMarketId,
-          },
-        },
-      });
-      const data = {
-        eventId,
-        oddsSourceId: source.id,
-        sourceMarketId: market.sourceMarketId,
-        settlementRuleId: ruleId,
-        period: market.period,
-        family: market.family,
-        marketType: market.marketType,
-        ...(market.participant !== undefined && market.participant !== null
-          ? { participant: market.participant }
-          : {}),
-        ...(market.line !== undefined && market.line !== null ? { line: market.line } : {}),
-      };
-      let row: Market;
-      if (existing === null) {
-        row = await tx.market.create({ data });
-      } else {
-        row = await tx.market.update({ where: { id: existing.id }, data });
-      }
-      marketBySourceKey.set(market.sourceMarketId, row);
-      markets += 1;
-    }
 
-    for (const selection of input.selections) {
-      const market = marketBySourceKey.get(selection.sourceMarketId);
-      if (market === undefined) {
-        invalid.push({
-          ref: selection.bookmaker,
-          reason: `unknown market ${selection.sourceMarketId}`,
-        });
-        continue;
-      }
-      const result = await upsertSelection(tx, selection, market);
-      if (result === null) {
-        invalid.push({
-          ref: selection.bookmaker,
-          reason: `outcome "${selection.outcome}" is not representable in the DB enum`,
-        });
-        continue;
-      }
-      selections += 1;
-      if (result.created || result.changed) observations += 1;
-    }
-
-    return { events, markets, selections, observations, invalid: invalid.length };
-  });
+      return { events, markets, selections, observations, invalid: invalid.length };
+    },
+    { timeout: 60_000 }
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import type { ProviderEnvelope, ProviderHealth } from "../envelope";
 import { buildRawPayload, newRequestId } from "../odds-provider";
 import type { OddsProvider, PollRequest, PollResult } from "../odds-provider";
 import { fetchJson, ProviderTransportError } from "../providers/http";
+import type { ProviderQuota, ProviderResponseMeta } from "../providers/http";
 import { ODDS_API_MARKET_KEYS } from "../providers/keys";
 import { translateProviderOdds } from "../providers/translate";
 import type { WireEvent } from "../providers/translate";
@@ -97,7 +98,29 @@ function toStatus(status: string | undefined): EventStatus {
 export class OddsApiProvider implements OddsProvider {
   readonly providerKey = "odds-api" as const;
 
+  /**
+   * Balance from the most recent HTTP response to this provider.
+   *
+   * Mutated from the `onMeta` callback inside `poll`/`health`, so it reflects the
+   * newest response this instance has seen - including a failed one, which is
+   * the reading that matters when the cycle goes DOWN.
+   */
+  private lastQuota: ProviderQuota | undefined;
+
   constructor(private readonly config: OddsApiProviderConfig) {}
+
+  /** See `OddsProvider.quotaSnapshot`. */
+  quotaSnapshot(): ProviderQuota | undefined {
+    return this.lastQuota;
+  }
+
+  /**
+   * Record quota headers. Bound per call so it can be handed straight to
+   * `fetchJson`, which invokes it on both the success and the error path.
+   */
+  private captureMeta = (meta: ProviderResponseMeta): void => {
+    if (meta.quota !== undefined) this.lastQuota = meta.quota;
+  };
 
   private get baseUrl(): string {
     return this.config.baseUrl ?? DEFAULT_BASE_URL;
@@ -152,7 +175,7 @@ export class OddsApiProvider implements OddsProvider {
 
     let payload: unknown;
     try {
-      payload = await fetchJson(url, { headers: this.authHeaders() });
+      payload = await fetchJson(url, { headers: this.authHeaders() }, undefined, this.captureMeta);
     } catch (error) {
       this.rethrow(error);
     }
@@ -195,7 +218,10 @@ export class OddsApiProvider implements OddsProvider {
       const payload = await fetchJson(
         this.withQueryAuth(`${this.baseUrl}/v4/sports`),
         { headers: this.authHeaders() },
-        10_000
+        10_000,
+        // /v4/sports is documented as not quota-billed, but it still reports the
+        // headers, so this keeps the snapshot fresh without spending a credit.
+        this.captureMeta
       );
       return {
         provider: this.providerKey,

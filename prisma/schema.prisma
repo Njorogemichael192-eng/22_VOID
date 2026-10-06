@@ -330,6 +330,9 @@ model OddsObservation {
   rawJson         Json?
 
   @@index([selectionId, observedAt])
+  // Phase 19 Step 1: leads with a time column so retention pruning can range-scan
+  // globally instead of walking the whole table.
+  @@index([observedAt])
   @@map("odds_observations")
 }
 
@@ -348,6 +351,8 @@ model RawPayload {
   createdAt    DateTime    @default(now())
 
   @@index([oddsSourceId, receivedAt])
+  // Phase 19 Step 1: global age-based prune support (spec §65).
+  @@index([receivedAt])
   @@map("raw_payloads")
 }
 
@@ -467,5 +472,7 @@ model ScannerHealth {
   createdAt    DateTime     @default(now())
 
   @@index([oddsSourceId, startedAt])
+  // Phase 19 Step 1: global age-based prune support.
+  @@index([startedAt])
   @@map("scanner_health")
 }

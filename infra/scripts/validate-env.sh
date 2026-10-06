@@ -45,6 +45,15 @@ validate_provider_key() {
   esac
 }
 
+# The Odds API issues fixed-length 32-character keys, so a length that is not 32
+# is a truncated paste or the wrong credential entirely. Both surface as an
+# opaque 401 at the provider, long after this script has passed. Other provider
+# keys are only bounded below, because their issuers differ.
+validate_odds_api_key() {
+  validate_provider_key ODDS_API_KEY "${ODDS_API_KEY:-}"
+  [ "${#ODDS_API_KEY}" -eq 32 ] || fail "ODDS_API_KEY must be exactly 32 characters (got ${#ODDS_API_KEY}) - The Odds API issues fixed-length keys, so any other length is a truncated paste or the wrong credential"
+}
+
 validate_positive_integer() {
   integer_name=$1
   integer_value=${2:-}
@@ -123,13 +132,29 @@ if [ "$role" = worker ]; then
   esac
 
   if [ "$WORKER_PROVIDER" = odds-api ]; then
-    validate_provider_key ODDS_API_KEY "${ODDS_API_KEY:-}"
+    validate_odds_api_key
   elif [ -n "${ODDS_API_KEY:-}" ]; then
-    validate_provider_key ODDS_API_KEY "$ODDS_API_KEY"
+    validate_odds_api_key
   fi
 
   validate_base_url ODDS_API_BASE_URL "${ODDS_API_BASE_URL:-https://api.the-odds-api.com}"
   validate_positive_integer WORKER_HEALTH_PORT "${WORKER_HEALTH_PORT:-8081}"
   validate_positive_integer WORKER_STALENESS_MS "${WORKER_STALENESS_MS:-300000}"
   [ "${WORKER_HEALTH_PORT:-8081}" -le 65535 ] || fail "WORKER_HEALTH_PORT must be at most 65535"
+
+  # The poll interval and the staleness ceiling are one setting, not two.
+  # WORKER_STALENESS_MS is the age past which the last completed cycle counts as
+  # stale: /healthz answers 503 and Docker marks the container unhealthy. The
+  # scheduler idles SCANNER_POLL_INTERVAL_MS between cycles, so an interval above
+  # that ceiling leaves the worker stale for the entire gap between every poll.
+  # restart: unless-stopped restarts on exit, not on health, so it never self-
+  # corrects. Checked here as well as in config.ts so the stack fails once at the
+  # entrypoint with a readable message, instead of Node throwing inside a
+  # restart:unless-stopped loop.
+  validate_positive_integer SCANNER_POLL_INTERVAL_MS "${SCANNER_POLL_INTERVAL_MS:-15000}"
+  poll_interval_ms=${SCANNER_POLL_INTERVAL_MS:-15000}
+  staleness_ms=${WORKER_STALENESS_MS:-300000}
+  if [ "$poll_interval_ms" -gt "$staleness_ms" ]; then
+    fail "SCANNER_POLL_INTERVAL_MS=$poll_interval_ms exceeds WORKER_STALENESS_MS=$staleness_ms - the worker would report itself stale (unhealthy) for the whole gap between every poll. Raise WORKER_STALENESS_MS above SCANNER_POLL_INTERVAL_MS or lower the poll interval."
+  fi
 fi

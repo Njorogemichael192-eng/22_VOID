@@ -73,11 +73,14 @@ Rule: provider-specific logic stays in adapters under `provider-contracts`; the 
    `invalid`, never guessed.
 6. **Persist** via `@22void/db` (`persistCanonicalRun`: events → source bindings →
    settlement rules → markets → selections; idempotent upserts).
-7. **Detect** (`src/detect.ts`): reads the fresh priced selections, runs the Phase 10
-   `scanCandidates` + Phase 11 `validateCandidate` pipeline, and persists every ARB scan's
-   outcome (verified/theoretical/stale/rejected) with its audit trail
-   (`persistOpportunity`). The §39 recheck is served by the cycle itself: current prices
-   *are* the recheck, so scans are self-consistent.
+ 7. **Detect** (`src/detect.ts`): reads the fresh priced selections, applies spec §55
+    best-price bookmaker selection per generation group (`eventId|period`), runs the Phase 10
+    `scanCandidates` + Phase 11 `validateCandidate` pipeline, and persists every ARB scan's
+    outcome (verified/theoretical/stale/rejected) with its audit trail
+    (`persistOpportunity`). The §39 recheck is served by the cycle itself: current prices
+    *are* the recheck, so scans are self-consistent. Candidate generation is bounded by
+    `maxCandidates` (default `DEFAULT_MAX_CANDIDATES` = 20 000) and the summary reports
+    `capped`, so a truncated search is distinguishable from an exhausted one.
 8. **Availability + heartbeat**: a successful cycle marks the source `HEALTHY`; a failed
    poll marks it `DOWN`. The very next successful cycle flips it back — the worker
    acceptance model is *transient provider failures recover*.
@@ -93,6 +96,22 @@ Scanner loop (workers/odds-collector)
       -> reconcile opportunity episodes (sweep/restore)
       -> heartbeat + source availability (HEALTHY/DEGRADED/DOWN)
 ```
+
+**Freshness is measured against price age, not poll age — so at the current cadence
+`VERIFIED_ARB` is unreachable by construction.** The 15 s recheck window
+(`DEFAULT_FRESHNESS_POLICY.agingMs`) bounds `now - sourceUpdatedAt`, where `sourceUpdatedAt`
+is the bookmaker's own timestamp on the quote, not the moment the worker last polled. A poll
+interval of 90 minutes therefore guarantees every leg is read far outside the window:
+`classifyFreshness` reports `STALE` and `validateCandidate` takes the stale branch
+(`STALE`/`STALE_ODDS`) before the `VERIFIED_ARB` path can be reached — even though the §39
+recheck itself compares the cycle's own prices and would pass. This is the honest reading
+(an hour-old quote cannot be guaranteed), so it is documented rather than weakened. The
+persisted `expiresAt` records the horizon that was already missed (oldest leg age +
+`maxAgeMs`), which is what `explain` renders as "prices are no longer guaranteed fresh", and
+`validatedAt` records when the recheck ran. Shortening the interval to sit inside the window
+is a paid-plan decision (a 15 s cadence burns the 500-credit free plan in hours), not an
+engine change: the policy stays at 15 s until then, and `STALE` is the expected steady state
+on the free plan.
 
 ## History and reconstruction (Phase 15)
 

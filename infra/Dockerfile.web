@@ -74,6 +74,13 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/package-lock.json ./package-lock.json
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --from=builder /app/node_modules ./node_modules
+# `migrate` runs as `nextjs` (below), but Prisma resolves its engines by writing
+# into node_modules/@prisma/engines while `migrate deploy` runs, and node_modules
+# arrives root-owned from the builder. Without this the one-shot migrate job
+# exits 1 with "Can't write to /app/node_modules/@prisma/engines" — and because
+# web and worker both gate on `service_completed_successfully`, a single
+# unapplied migration stops the entire stack from starting.
+RUN chown -R nextjs:nodejs /app/node_modules/@prisma
 COPY --from=builder /app/apps/web/.next/standalone ./
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder /app/prisma ./prisma

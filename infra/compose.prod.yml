@@ -110,6 +110,25 @@ services:
       # so it is not copied into proxy/CDN access logs. Set this only if the
       # provider rejects header auth; it puts the key back in the URL.
       ODDS_API_AUTH_IN_QUERY: ${ODDS_API_AUTH_IN_QUERY:-}
+      # Regions / markets / sport actually requested on /v4/sports/{sport}/odds.
+      #
+      # These three were readable by the worker (config.ts) but were never passed
+      # through this file, so setting them in the env file was silently dropped and
+      # the adapter always fell back to its in-code defaults. A documented knob
+      # that does nothing is worse than an absent one: an operator who set
+      # ODDS_API_REGIONS=uk to halve their quota burn had no way to notice it was
+      # ignored, and kept paying for uk,eu.
+      #
+      # CREDITS: cost per poll = (number of markets) x (number of regions), per
+      # The Odds API /odds documentation. The defaults below are 2 x 2 = 4 credits
+      # per poll. Dropping ODDS_API_MARKETS to `h2h` halves that to 2 credits per
+      # poll, at the cost of the totals (over/under) market, which the provider
+      # documents as mainly available for US sports and bookmakers - so for uk/eu
+      # soccer it may return nothing at all while still costing a full credit.
+      # Comma-separated, no spaces.
+      ODDS_API_REGIONS: ${ODDS_API_REGIONS:-uk,eu}
+      ODDS_API_MARKETS: ${ODDS_API_MARKETS:-h2h,totals}
+      ODDS_API_SPORT: ${ODDS_API_SPORT:-soccer_epl}
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in infra/.env.prod}
       SCANNER_POLL_INTERVAL_MS: ${SCANNER_POLL_INTERVAL_MS:-15000}
       RATE_LIMIT_CAPACITY: ${RATE_LIMIT_CAPACITY:-10}

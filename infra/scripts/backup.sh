@@ -447,6 +447,13 @@ file="$backup_dir/$file_name"
 checksum="$file.sha256"
 
 if ! pg_dump -Fc --no-owner --no-privileges -f "$file"; then
+  # pg_dump opens its output file before it connects, so a failed dump leaves a
+  # zero-byte file behind. The retention sweep near the end of this script only
+  # runs after a *successful* dump, so a persistently failing backup accumulated
+  # one empty file per attempt forever -- 442 of them had built up on the verify
+  # volume before this was found, and nothing would ever have removed them.
+  # Removing the partial here keeps a failing backup from filling its own volume.
+  rm -f "$file" 2>/dev/null || true
   fail 'pg_dump failed'
 fi
 [ -s "$file" ] || fail 'pg_dump produced an empty file'

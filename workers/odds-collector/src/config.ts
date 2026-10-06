@@ -22,6 +22,7 @@ export interface ResolvedHealthConfig {
 export const DEFAULT_WORKER_STARTUP_GRACE_MS = 30_000;
 export const DEFAULT_WORKER_STALENESS_MS = 300_000;
 export const DEFAULT_WORKER_STALE_THRESHOLD_MS = DEFAULT_WORKER_STALENESS_MS;
+export const DEFAULT_SCANNER_POLL_INTERVAL_MS = 15_000;
 
 export function isProductionEnvironment(env: WorkerEnvironment = process.env): boolean {
   return env.NODE_ENV === "production";
@@ -233,4 +234,45 @@ export function resolveHealthConfig(env: WorkerEnvironment = process.env): Resol
       false
     ),
   };
+}
+
+export function resolveScanIntervalMs(env: WorkerEnvironment = process.env): number {
+  return readDuration(env, ["SCANNER_POLL_INTERVAL_MS"], DEFAULT_SCANNER_POLL_INTERVAL_MS, false);
+}
+
+/**
+ * The poll interval and the health staleness ceiling are not independent knobs.
+ *
+ * `staleAfterMs` is a freshness assertion, not a timeout: `/healthz` compares it
+ * against the age of the last *completed* cycle (`health.ts`), answers 503, and
+ * Docker marks the container unhealthy for anything longer. The scheduler waits
+ * `intervalMs` between cycles, so an interval above the ceiling guarantees the
+ * worker is stale for the entire gap between polls - permanently unhealthy while
+ * behaving exactly as configured. `restart: unless-stopped` restarts on exit, not
+ * on health, so nothing self-corrects it and the container simply sits there red.
+ *
+ * The failure is silent and expensive to diagnose after the fact (the logs show
+ * healthy cycles and the dashboard shows fresh data), and it is trivially caused
+ * by the legitimate act of raising the interval to conserve provider quota. So
+ * it is refused at startup instead, naming both values.
+ *
+ * A margin is not required - the guard is a strict `>` - but equal values are a
+ * knife edge: any scheduling jitter puts the cycle just over the line. Callers
+ * should leave comfortable headroom (2x is reasonable).
+ */
+export function assertIntervalWithinStaleness(input: {
+  intervalMs: number;
+  staleAfterMs: number;
+}): void {
+  if (input.intervalMs <= input.staleAfterMs) return;
+  throw new Error(
+    `Invalid SCANNER_POLL_INTERVAL_MS/WORKER_STALENESS_MS: ` +
+      `SCANNER_POLL_INTERVAL_MS=${input.intervalMs} exceeds ` +
+      `WORKER_STALENESS_MS=${input.staleAfterMs}. The worker reports itself ` +
+      `stale (and therefore unhealthy) once the last completed cycle is older ` +
+      `than WORKER_STALENESS_MS, and a poll interval above that ceiling means ` +
+      `it is stale for the whole gap between every poll. Raise ` +
+      `WORKER_STALENESS_MS above SCANNER_POLL_INTERVAL_MS (2x is a reasonable ` +
+      `margin) or lower the poll interval.`
+  );
 }

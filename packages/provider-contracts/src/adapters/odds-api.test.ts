@@ -160,3 +160,81 @@ describe("OddsApiProvider transport", () => {
     });
   });
 });
+
+describe("OddsApiProvider quota visibility", () => {
+  /** Stub fetch with quota headers, keeping the existing body shape. */
+  function stubFetchWithQuota(
+    headers: Record<string, string>,
+    body: unknown = ODDS_API_SOCCER_RAW,
+    ok = true,
+    status = 200
+  ) {
+    const impl = vi.fn(async () => ({
+      ok,
+      status,
+      headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
+      json: async () => body,
+    }));
+    vi.stubGlobal("fetch", impl);
+    return impl;
+  }
+
+  it("reports undefined before any request has been made", () => {
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+    expect(provider.quotaSnapshot()).toBeUndefined();
+  });
+
+  it("captures the balance from a successful poll", async () => {
+    // h2h,totals across uk,eu costs 2 x 2 = 4 credits, so `last` should read 4.
+    // That is the whole point: a silent change to the market or region list shows
+    // up as a change in the price of a single poll.
+    stubFetchWithQuota({
+      "x-requests-remaining": "487",
+      "x-requests-used": "13",
+      "x-requests-last": "4",
+    });
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+
+    await provider.poll();
+    expect(provider.quotaSnapshot()).toEqual({ remaining: 487, used: 13, last: 4 });
+  });
+
+  it("captures the balance from a failed poll, which is how exhaustion is diagnosed", async () => {
+    stubFetchWithQuota({ "x-requests-remaining": "0", "x-requests-used": "500" }, null, false, 401);
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+
+    await expect(provider.poll()).rejects.toBeTruthy();
+    // remaining=0 is what distinguishes "plan exhausted" from "bad key".
+    expect(provider.quotaSnapshot()).toEqual({ remaining: 0, used: 500, last: undefined });
+  });
+
+  it("leaves the balance unreported when the provider sends no quota headers", async () => {
+    stubFetchWithQuota({});
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+
+    await provider.poll();
+    expect(provider.quotaSnapshot()).toBeUndefined();
+  });
+
+  it("updates on every poll rather than caching the first reading", async () => {
+    stubFetchWithQuota({ "x-requests-remaining": "496", "x-requests-used": "4" });
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+
+    await provider.poll();
+    expect(provider.quotaSnapshot()?.remaining).toBe(496);
+
+    stubFetchWithQuota({ "x-requests-remaining": "492", "x-requests-used": "8" });
+    await provider.poll();
+    expect(provider.quotaSnapshot()?.remaining).toBe(492);
+  });
+
+  it("captures the balance from the health probe too, without spending a credit", async () => {
+    // /v4/sports is documented as not quota-billed but still reports the headers.
+    stubFetchWithQuota({ "x-requests-remaining": "500", "x-requests-used": "0" }, []);
+    const provider = new OddsApiProvider({ apiKey: "test-key" });
+
+    const health = await provider.health();
+    expect(health.reachable).toBe(true);
+    expect(provider.quotaSnapshot()).toEqual({ remaining: 500, used: 0, last: undefined });
+  });
+});

@@ -18,6 +18,7 @@ import type {
   PollRequest,
   PollResult,
   ProviderKey,
+  ProviderQuota,
 } from "@22void/provider-contracts";
 
 import { runDetection, type DetectionSummary } from "./detect.js";
@@ -62,6 +63,16 @@ export interface ScanCycleResult {
   /** Phase 15 reconciliation outcome (present only when detection ran). */
   history?: ReconcileSummary;
   sourceStatus: WorkerSourceStatus;
+  /**
+   * Provider credit balance after this cycle, or null when the provider reports
+   * no quota headers.
+   *
+   * Carried on the result rather than logged inside the adapter so the number
+   * lands in one place per cycle next to the status it explains, and so a DOWN
+   * cycle can show `remaining=0` - the difference between an exhausted plan and a
+   * bad key, which are otherwise the same opaque 401.
+   */
+  quota: ProviderQuota | null;
 }
 
 function errorMessage(error: unknown): string {
@@ -112,6 +123,9 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
       normalized: [],
       detection: null,
       sourceStatus: "DOWN",
+      // Read even on the failure path: the poll failed *after* the provider
+      // answered, so the quota reading is the one that explains why.
+      quota: deps.provider.quotaSnapshot?.() ?? null,
     };
   }
 
@@ -140,6 +154,7 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
       detection: {
         priced: detection.priced,
         scans: detection.scans,
+        capped: detection.capped,
         arbs: detection.arbs,
         opportunities: detection.opportunities,
       },
@@ -166,11 +181,13 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
       detection: {
         priced: detection.priced,
         scans: detection.scans,
+        capped: detection.capped,
         arbs: detection.arbs,
         opportunities: detection.opportunities.length,
       },
       history,
       sourceStatus: "HEALTHY",
+      quota: deps.provider.quotaSnapshot?.() ?? null,
     };
   } catch (error) {
     const message = `processing failed after poll: ${errorMessage(error)}`;
@@ -188,6 +205,7 @@ export async function runScanCycle(deps: ScanCycleDeps): Promise<ScanCycleResult
       normalized: [],
       detection: null,
       sourceStatus: "DEGRADED",
+      quota: deps.provider.quotaSnapshot?.() ?? null,
     };
   }
 }

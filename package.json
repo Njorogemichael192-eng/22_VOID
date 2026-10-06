@@ -28,6 +28,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:test": "npm test -w @22void/db",
+    "db:retention": "tsx scripts/db-retention.ts",
+    "db:retention:test": "tsx scripts/db-retention.ts --self-test",
     "worker:collect": "npm run start --workspace @22void/odds-collector",
     "smoke:prod": "tsx scripts/smoke-prod.ts",
     "compose:prod:config": "docker compose --env-file infra/.env.prod -f infra/compose.prod.yml config --quiet",

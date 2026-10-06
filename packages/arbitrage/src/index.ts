@@ -25,6 +25,7 @@ export type {
 export {
   bestPricePerSelection,
   classifyStructure,
+  DEFAULT_MAX_CANDIDATES,
   familiesCompatible,
   formatPruneVerdict,
   generateCandidates,

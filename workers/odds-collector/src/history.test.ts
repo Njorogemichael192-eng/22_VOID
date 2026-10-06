@@ -8,7 +8,7 @@ import { createMemoryWorkerStore } from "./store.js";
 const NOW = new Date().toISOString();
 
 function reportOf(opportunities: PersistOpportunityInput[]): DetectionReport {
-  return { priced: 0, scans: 0, arbs: 0, opportunities };
+  return { priced: 0, scans: 0, capped: false, arbs: 0, opportunities };
 }
 
 /** One event with a real two-way arb (OVER 2.2 / UNDER 2.1 on total 2.5). */

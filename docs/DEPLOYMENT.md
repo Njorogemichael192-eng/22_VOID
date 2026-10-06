@@ -99,7 +99,8 @@ docker compose --env-file infra/.env.prod -f infra/compose.prod.yml run --rm mig
 | `ALLOW_MOCK_PROVIDER_IN_PRODUCTION`                            | worker      | unset                            | demo escape hatch for the refusal; leave empty on a real stack                                                    |
 | `ODDS_API_KEY`, `ODDS_API_BASE_URL`                            | worker      | for live provider                | required when `WORKER_PROVIDER=odds-api`; the base URL **must be `https://`**                                     |
 | `ODDS_API_AUTH_IN_QUERY`                                       | worker      | unset                            | escape hatch that sends the key as `?apiKey=`; leave empty (see below)                                            |
-| `SCANNER_POLL_INTERVAL_MS`                                     | worker      | default 15000                    | cycle length (the "scheduler")                                                                                    |
+| `ODDS_API_REGIONS`, `ODDS_API_MARKETS`, `ODDS_API_SPORT`       | worker      | see `env.prod.example`           | narrow what each poll asks for; the credit cost of a poll is **regions x markets**                                |
+| `SCANNER_POLL_INTERVAL_MS`                                     | worker      | default 15000                    | cycle length (the "scheduler"); **must not exceed `WORKER_STALENESS_MS`** - see below                             |
 | `API_RATE_LIMIT_CAPACITY` / `API_RATE_LIMIT_REFILL_PER_SECOND` | web         | 120 / 2                          | the public API's per-caller token bucket (429 + `Retry-After`)                                                    |
 | `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND`         | worker      | 10 / 5                           | token bucket for the worker's outbound provider calls                                                             |
 | `BACKUP_RETENTION_DAYS`, `BACKUP_SCHEDULE`                     | backup      | default 14 / `0 2 * * *`         | cron (UTC)                                                                                                        |
@@ -313,6 +314,19 @@ cached 200 — cannot keep reporting a wedged worker as healthy.
 - **Scan loop**: the worker cycles every `SCANNER_POLL_INTERVAL_MS` via its own
   native scheduler (`nativeScheduler` in `workers/odds-collector/src/runtime.ts`).
   No external cron is needed for collection.
+- **Poll interval is coupled to the health ceiling**: raising
+  `SCANNER_POLL_INTERVAL_MS` to conserve provider quota is an expected
+  operation, and it drags the healthcheck with it. `SCANNER_POLL_INTERVAL_MS`
+  **must not exceed `WORKER_STALENESS_MS`** (default `300000`), because health
+  reports `stale` — and the container unhealthy — once the last completed cycle
+  is older than `WORKER_STALENESS_MS`. Leave the interval high and the worker
+  spends most of its life reporting stale while every log line claims success.
+  Both a startup guard (`assertIntervalWithinStaleness` in
+  `workers/odds-collector/src/config.ts`, called before the provider is built)
+  and a pre-deploy check (`infra/scripts/validate-env.sh`) fail fast when the
+  interval is the larger of the two, naming both values. The shipped defaults are
+  `15000` / `300000`; the free-tier configuration documented in
+  `infra/env.prod.example` is `5400000` / `10800000`.
 - **Backups**: the `backup` container runs `pg_dump` once at boot, then on
   `BACKUP_SCHEDULE` (a daily UTC cron) — retention handled by `backup.sh`.
 - **Backup supervision**: `backup-entrypoint.sh` backgrounds `crond` and runs the
@@ -401,6 +415,56 @@ restore is recoverable.
 Backups live in `infra/backups/` on the host (a named volume would be an
 alternative). Off-site/object storage sync of `infra/backups/` is an operator choice
 (the bundle keeps it a thin, standard pg_dump format precisely so shipping is easy).
+
+#### Data retention
+
+A backup bounds how long you can lose data; retention bounds how much you
+_accumulate_. Before Phase 19 nothing ever deleted a row: `raw_payloads` grows on
+every poll (~3 kB per mock payload, measured ~530 MB/month at a 4/min poll rate),
+and on the verify database it had reached 36 MB of a 47 MB database.
+
+Retention is a **separate, explicit command**, not something the worker does on a
+timer. `raw_payloads`, `scanner_health` and `odds_observations` are only written by
+the scanner, so a scheduled prune competes with the workload for the same locks;
+running it as its own job keeps the failure blast radius at zero.
+
+```sh
+# DRY RUN is the default — prints what would go, deletes nothing.
+DATABASE_URL='postgresql://...' npm run db:retention
+
+# enforce
+DATABASE_URL='postgresql://...' npm run db:retention -- --apply
+
+# override a window, or restrict to one table
+RETENTION_RAW_PAYLOAD_DAYS=14 npm run db:retention -- --apply
+```
+
+| Variable                        | Default                | Effect                                |
+| ------------------------------- | ---------------------- | ------------------------------------- |
+| `RETENTION_RAW_PAYLOAD_DAYS`    | `7`                    | Raw provider wire payloads (spec §65) |
+| `RETENTION_SCANNER_HEALTH_DAYS` | `30`                   | Scanner run history                   |
+| `RETENTION_OBSERVATIONS_DAYS`   | `90`                   | Price history per selection           |
+| `RETENTION_AUDIT_LOGS_DAYS`     | _unset = keep forever_ | Audit trail                           |
+| `RETENTION_BATCH_SIZE`          | `1000`                 | Rows per DELETE statement             |
+| `RETENTION_MAX_BATCHES`         | `20`                   | Statements per table per run          |
+
+Three behaviours worth knowing before you schedule this:
+
+- **`audit_logs` is never pruned by default.** Deleting the audit trail to save
+  space is a compliance decision, so it stays opt-in. Set a positive number to
+  enable it.
+- **Work per run is bounded.** Each table is drained in `batchSize` chunks for at
+  most `maxBatches` rounds. If a backlog outlasts that, the run prints
+  `still pending` and exits 0 — rerun it, and it continues where it stopped.
+  Cron hourly and it converges.
+- **Space is reclaimed, not returned.** A bulk `DELETE` leaves dead tuples that
+  autovacuum reclaims for reuse; the file on disk does not shrink without a
+  blocking `VACUUM FULL`. Retention bounds _growth_, which is the goal — do not
+  expect `pg_database_size` to drop the moment a prune finishes.
+
+Schedule it from cron or a systemd timer on the host, not from inside the
+container. The bundled compose stack has no scheduler for it (the only cron in
+the deployment is the backup sidecar's own).
 
 ---
 

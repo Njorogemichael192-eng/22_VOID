@@ -7,20 +7,26 @@
  *   ODDS_API_KEY / ODDS_API_BASE_URL             (odds-api provider)
  *   DATABASE_URL                 when set, uses the Postgres store; otherwise in-memory
  *   SCANNER_POLL_INTERVAL_MS     cycle interval in ms (default 15000)
+ *                                 must not exceed WORKER_STALENESS_MS; refused at
+ *                                 startup otherwise (see config.ts)
  *   RATE_LIMIT_CAPACITY          token bucket size (default 10)
  *   RATE_LIMIT_REFILL_PER_SECOND refill rate (default 5)
  *   WORKER_HEALTH_PORT           liveness/metrics endpoint port (default 8081)
+ *   WORKER_STALENESS_MS          age past which a cycle is "stale" (default 300000)
  */
 
 import "dotenv/config";
 
 import { MockProvider, OddsApiProvider } from "@22void/provider-contracts";
+import { formatProviderQuota } from "@22void/provider-contracts";
 import { createPrismaClient } from "@22void/db";
 
 import {
   ALLOW_MOCK_PROVIDER_ENV,
+  assertIntervalWithinStaleness,
   isProductionEnvironment,
   resolveHealthConfig,
+  resolveScanIntervalMs,
   resolveWorkerConfig,
   type ResolvedProviderConfig,
   type ResolvedStoreConfig,
@@ -122,10 +128,17 @@ const processStartedAt = Date.now();
 async function main(): Promise<void> {
   const resolved = resolveWorkerConfig();
   const healthConfig = resolveHealthConfig();
+  // Refused before anything is constructed or any provider call is made: an
+  // interval above the staleness ceiling is a configuration error, and starting
+  // up "successfully" into a permanently unhealthy container hides it.
+  const intervalMs = resolveScanIntervalMs();
+  assertIntervalWithinStaleness({
+    intervalMs,
+    staleAfterMs: healthConfig.staleAfterMs,
+  });
   const provider = createProvider(resolved.provider);
   const { store, label } = createStore(resolved.store);
   warnOnSyntheticProductionData(resolved.provider, label);
-  const intervalMs = numberEnv("SCANNER_POLL_INTERVAL_MS", 15_000);
   const capacity = numberEnv("RATE_LIMIT_CAPACITY", 10);
   const refillPerSecond = numberEnv("RATE_LIMIT_REFILL_PER_SECOND", 5);
   const rateLimiter = new TokenBucketRateLimiter({ capacity, refillPerSecond });
@@ -154,6 +167,12 @@ async function main(): Promise<void> {
         provider: result.provider,
         receivedAt: result.receivedAt,
         attempts: result.attempts,
+        // Credit balance for this cycle. `unreported` means the provider sent no
+        // quota headers - which is expected for the mock provider and would be a
+        // gap worth noticing for a metered one, because it means the budget is
+        // invisible. `last` is the per-poll cost, so a change in markets or
+        // regions shows up here as a change in the price of one poll.
+        quota: formatProviderQuota(result.quota),
         collect: result.collect,
         normalized: result.normalized.map(
           (entry) => `${entry.action}:${entry.canonicalEventId}@${entry.confidence.toFixed(2)}`

@@ -276,6 +276,9 @@ export function bestPricePerSelection(priced: readonly PricedSelection[]): Price
   return [...best.values()];
 }
 
+/** Default hard cap on generated candidates (60); bounds combinatorics. */
+export const DEFAULT_MAX_CANDIDATES = 20_000;
+
 /** Generates the staged candidate leg sets for the supplied priced selections. */
 export function generateCandidates(
   priced: readonly PricedSelection[],
@@ -283,7 +286,7 @@ export function generateCandidates(
 ): Candidate[] {
   const minLegs = options.minLegs ?? 2;
   const maxLegs = options.maxLegs ?? 3;
-  const maxCandidates = options.maxCandidates ?? 20_000;
+  const maxCandidates = options.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
 
   const groups = new Map<string, PricedSelection[]>();
   for (const entry of priced) {

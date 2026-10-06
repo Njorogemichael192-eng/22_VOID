@@ -21,6 +21,21 @@ export {
   type OddsSourceLink,
 } from "./raw-payloads";
 export {
+  applyRetention,
+  resolveRetentionPolicy,
+  retentionCutoff,
+  retentionColumn,
+  RETENTION_TABLES,
+  DEFAULT_RETENTION_POLICY,
+  DEFAULT_RETENTION_BATCH_SIZE,
+  DEFAULT_RETENTION_MAX_BATCHES,
+  type RetentionTable,
+  type RetentionPolicy,
+  type ApplyRetentionOptions,
+  type RetentionReport,
+  type RetentionTableReport,
+} from "./retention";
+export {
   persistCanonicalRun,
   toSelectionOutcomeType,
   loadPricedSelections,
