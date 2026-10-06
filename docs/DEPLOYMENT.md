@@ -95,11 +95,13 @@ docker compose --env-file infra/.env.prod -f infra/compose.prod.yml run --rm mig
 | `DATABASE_URL`                                                 | web, worker | yes                              | `postgresql://u:p@db:5432/db`                                                                                     |
 | `DASHBOARD_SOURCE`                                             | web         | yes (`db`)                       | the entrypoint validator fails startup unless it is exactly `db`; `demo` serves the fixture repo (e2e/smoke only) |
 | `API_KEY`, `ADMIN_API_KEY`                                     | web         | yes                              | sent as the `x-api-key` header, **not** `Authorization: Bearer`; missing → API fails closed 401                   |
-| `WORKER_PROVIDER`                                              | worker      | `odds-api`                       | required in production; `mock` is **refused** (see below)                                                         |
+| `WORKER_PROVIDER`                                              | worker      | `odds-api`                       | required in production; a **comma list** — one cycle polls every entry (`odds-api,parlay-api`); `mock` is **refused** (see below) and cannot be combined with a real provider |
 | `ALLOW_MOCK_PROVIDER_IN_PRODUCTION`                            | worker      | unset                            | demo escape hatch for the refusal; leave empty on a real stack                                                    |
-| `ODDS_API_KEY`, `ODDS_API_BASE_URL`                            | worker      | for live provider                | required when `WORKER_PROVIDER=odds-api`; the base URL **must be `https://`**                                     |
+| `ODDS_API_KEY`, `ODDS_API_BASE_URL`                            | worker      | for live provider                | required when `WORKER_PROVIDER` contains `odds-api`; the base URL **must be `https://`**                          |
 | `ODDS_API_AUTH_IN_QUERY`                                       | worker      | unset                            | escape hatch that sends the key as `?apiKey=`; leave empty (see below)                                            |
 | `ODDS_API_REGIONS`, `ODDS_API_MARKETS`, `ODDS_API_SPORT`       | worker      | see `env.prod.example`           | narrow what each poll asks for; the credit cost of a poll is **regions x markets**                                |
+| `PARLAY_API_KEY`, `PARLAY_API_BASE_URL`                        | worker      | for Provider B                   | required when `WORKER_PROVIDER` contains `parlay-api`; key sent as `X-API-Key`; **separate quota** from the above |
+| `PARLAY_API_REGIONS`, `PARLAY_API_MARKETS`, `PARLAY_API_SPORT` | worker      | see `env.prod.example`           | Provider B request selection; defaults match the adapter's, surfaced so they are visible and overridable          |
 | `SCANNER_POLL_INTERVAL_MS`                                     | worker      | default 15000                    | cycle length (the "scheduler"); **must not exceed `WORKER_STALENESS_MS`** - see below                             |
 | `API_RATE_LIMIT_CAPACITY` / `API_RATE_LIMIT_REFILL_PER_SECOND` | web         | 120 / 2                          | the public API's per-caller token bucket (429 + `Retry-After`)                                                    |
 | `RATE_LIMIT_CAPACITY` / `RATE_LIMIT_REFILL_PER_SECOND`         | worker      | 10 / 5                           | token bucket for the worker's outbound provider calls                                                             |
@@ -175,13 +177,15 @@ collector — which is exactly why it is refused rather than warned about.
 WORKER_PROVIDER=mock NODE_ENV=production
 #   -> Refusing to run WORKER_PROVIDER=mock in production: it fabricates odds,
 #      and with DATABASE_URL set those synthetic rows are persisted and served as
-#      real opportunities. Set WORKER_PROVIDER=odds-api, or set
-#      ALLOW_MOCK_PROVIDER_IN_PRODUCTION=true if this is deliberately a demo.
+#      real opportunities. Set WORKER_PROVIDER to a real provider (odds-api,
+#      parlay-api), or set ALLOW_MOCK_PROVIDER_IN_PRODUCTION=true if this is
+#      deliberately a demo.
 ```
 
 Two escape routes, both explicit:
 
-- **`WORKER_PROVIDER=odds-api` with a real `ODDS_API_KEY`** — the correct fix.
+- **`WORKER_PROVIDER=odds-api` with a real `ODDS_API_KEY`** — the correct fix
+  (`odds-api,parlay-api` if Provider B is also configured).
 - **`ALLOW_MOCK_PROVIDER_IN_PRODUCTION=true`** — for a demo or smoke test that
   wants production-shaped infrastructure (real Postgres, real migrations) without
   spending provider quota. The worker starts and prints a startup banner stating
@@ -190,10 +194,14 @@ Two escape routes, both explicit:
   `.env.prod` does something predictable, and it is deliberately spelled out at
   length so it is greppable in an env file and in a shell history.
 
-`WORKER_PROVIDER` must also be one of the two known values everywhere, not just in
-production: an unrecognised value used to resolve to `mock` silently, so
+`WORKER_PROVIDER` must also be one of the three known values everywhere, not just
+in production: an unrecognised value used to resolve to `mock` silently, so
 `WORKER_PROVIDER=odds_api` in a developer's env file quietly served invented odds
-instead of erroring. The default `mock` is unaffected outside production, where
+instead of erroring. The list form is validated entry by entry — an empty segment
+(`odds-api,`), a repeat (`odds-api,odds-api`, which would poll the same feed twice
+per cycle and spend its quota twice) and `mock` alongside a real provider are all
+refused, because each of them silently narrows or falsifies what the cycle
+believes it polled. The default `mock` is unaffected outside production, where
 `NODE_ENV` is not `production` — `npm test` and local runs are unaffected.
 
 #### Rate limiting (two different limiters)

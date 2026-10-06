@@ -1,8 +1,13 @@
 import {
   MockProvider,
   ProviderTransportError,
+  buildMockEnvelope,
+  buildRawPayload,
+  newRequestId,
+  providerEnvelopeSchema,
   type OddsProvider,
   type PollResult,
+  type ProviderKey,
   type ProviderQuota,
 } from "@22void/provider-contracts";
 import { describe, expect, it } from "vitest";
@@ -55,22 +60,23 @@ describe("runScanCycle", () => {
     const provider = new FlakyProvider(() => new Date(now).toISOString(), Number.MAX_SAFE_INTEGER);
     const store = createMemoryWorkerStore([provider.providerKey]);
 
-    const down = await runScanCycle({ provider, store, ...immediateRetry });
+    const down = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     expect(down.status).toBe("DOWN");
     expect(down.attempts).toBe(2);
-    expect(down.sourceStatus).toBe("DOWN");
+    expect(down.sources).toHaveLength(1);
+    expect(down.sources[0]?.sourceStatus).toBe("DOWN");
     expect(await store.getSourceStatus(provider.providerKey)).toBe("DOWN");
     expect(provider.polls).toBe(2);
 
     provider.failuresLeft = 0; // the provider comes back
     now += 60_000;
 
-    const up = await runScanCycle({ provider, store, ...immediateRetry });
+    const up = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     expect(up.status).toBe("OK");
     expect(up.attempts).toBe(1);
-    expect(up.sourceStatus).toBe("HEALTHY");
+    expect(up.sources[0]?.sourceStatus).toBe("HEALTHY");
     expect(await store.getSourceStatus(provider.providerKey)).toBe("HEALTHY");
 
     const seeds = await store.loadEventSeeds();
@@ -83,12 +89,12 @@ describe("runScanCycle", () => {
     // rows -- previously this asserted three.
     expect(heartbeats).toHaveLength(2);
 
-    expect(heartbeats[0]?.runId).toBe(down.runId);
+    expect(heartbeats[0]?.runId).toBe(down.sources[0]?.runId);
     expect(heartbeats[0]?.status).toBe("DOWN");
     expect(heartbeats[0]?.startedAt).toBeInstanceOf(Date);
     expect(heartbeats[0]?.finishedAt).toBeInstanceOf(Date);
 
-    expect(heartbeats[1]?.runId).toBe(up.runId);
+    expect(heartbeats[1]?.runId).toBe(up.sources[0]?.runId);
     expect(heartbeats[1]?.status).toBe("HEALTHY");
     expect(heartbeats[1]?.startedAt).toBeInstanceOf(Date);
     expect(heartbeats[1]?.finishedAt).toBeInstanceOf(Date);
@@ -112,12 +118,132 @@ describe("runScanCycle", () => {
     const provider = new FlakyProvider(() => NOW, 1);
     const store = createMemoryWorkerStore([provider.providerKey]);
 
-    const cycle = await runScanCycle({ provider, store, ...immediateRetry });
+    const cycle = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     expect(cycle.status).toBe("OK");
     expect(cycle.attempts).toBe(2);
-    expect(cycle.sourceStatus).toBe("HEALTHY");
+    expect(cycle.sources[0]?.sourceStatus).toBe("HEALTHY");
     expect(provider.polls).toBe(2);
+  });
+});
+
+/**
+ * Phase 19: one cycle polls every provider `WORKER_PROVIDER` names. What has to
+ * hold is that each provider keeps its own heartbeat and availability — one feed
+ * failing must not condemn the feed that worked — and that detection runs once
+ * over the combined prices, because a cross-provider arbitrage only exists after
+ * both feeds are in the store.
+ */
+describe("runScanCycle with multiple providers", () => {
+  /**
+   * The shared mock fixture published under an arbitrary provider key, so two
+   * providers can describe the same matches under two different sources — which
+   * is the shape that makes provider 2's normalization resume from provider 1's
+   * bindings.
+   */
+  function fixtureProvider(key: ProviderKey, quota?: ProviderQuota): OddsProvider {
+    return {
+      providerKey: key,
+      ...(quota === undefined ? {} : { quotaSnapshot: () => quota }),
+      async poll() {
+        const requestId = newRequestId();
+        const base = buildMockEnvelope(NOW, requestId);
+        const envelope = providerEnvelopeSchema.parse({ ...base, provider: key, requestId });
+        return {
+          envelope,
+          rawPayload: buildRawPayload(key, NOW, envelope, requestId, "/fixture"),
+        };
+      },
+      health: async () => ({ provider: key, reachable: true, latencyMs: 0, checkedAt: NOW }),
+    };
+  }
+
+  it("polls every provider in one cycle and beats once per provider", async () => {
+    const providers = [fixtureProvider("odds-api"), fixtureProvider("parlay-api")];
+    const store = createMemoryWorkerStore(["odds-api", "parlay-api"]);
+
+    const cycle = await runScanCycle({ providers, store, ...immediateRetry });
+
+    expect(cycle.status).toBe("OK");
+    expect(cycle.sources.map((source) => source.provider)).toEqual(["odds-api", "parlay-api"]);
+    expect(cycle.sources.map((source) => source.status)).toEqual(["OK", "OK"]);
+    expect(cycle.attempts).toBe(2);
+
+    // One row per provider per cycle, not one row for the cycle: this is what
+    // keeps sourceLatencyStats reporting per-source latency.
+    const heartbeats = store.debugHeartbeats();
+    expect(heartbeats).toHaveLength(2);
+    expect(new Set(heartbeats.map((beat) => beat.runId)).size).toBe(2);
+    expect(heartbeats.every((beat) => beat.status === "HEALTHY")).toBe(true);
+    expect(store.debugRawPayloads()).toHaveLength(2);
+
+    // Detection ran once, after both feeds had persisted.
+    expect(cycle.detection).not.toBeNull();
+    expect(cycle.detection?.priced).toBeGreaterThan(0);
+    expect(cycle.history).toBeDefined();
+    expect(store.debugOpportunities().length).toBe(cycle.detection?.opportunities ?? -1);
+  });
+
+  it("keeps the healthy provider healthy when the other is down", async () => {
+    const healthy = fixtureProvider("odds-api");
+    const failing: OddsProvider = {
+      providerKey: "parlay-api",
+      poll: async () => {
+        throw new ProviderTransportError("401 unauthorized", { status: 401 });
+      },
+      health: async () => ({
+        provider: "parlay-api",
+        reachable: false,
+        latencyMs: 0,
+        checkedAt: NOW,
+      }),
+    };
+    const store = createMemoryWorkerStore(["odds-api", "parlay-api"]);
+
+    const cycle = await runScanCycle({
+      providers: [healthy, failing],
+      store,
+      ...immediateRetry,
+    });
+
+    // Partial feed, not total failure: the cycle degrades but keeps the prices
+    // that did arrive.
+    expect(cycle.status).toBe("DEGRADED");
+    expect(cycle.sources.map((source) => source.status)).toEqual(["OK", "DOWN"]);
+    expect(await store.getSourceStatus("odds-api")).toBe("HEALTHY");
+    expect(await store.getSourceStatus("parlay-api")).toBe("DOWN");
+    expect(cycle.error).toMatch(/parlay-api: poll failed/);
+
+    // A partial feed is still a feed: detection must not be skipped just because
+    // one of the configured providers did not answer.
+    expect(cycle.detection).not.toBeNull();
+    expect(cycle.collect.events).toBeGreaterThan(0);
+
+    const heartbeats = store.debugHeartbeats();
+    expect(heartbeats).toHaveLength(2);
+    expect(heartbeats.map((beat) => beat.status)).toEqual(["HEALTHY", "DOWN"]);
+    expect(store.debugRawPayloads()).toHaveLength(1);
+  });
+
+  it("reports each provider's own quota instead of one cycle-level number", async () => {
+    const providers = [
+      fixtureProvider("odds-api", { remaining: 487, used: 13, last: 2 }),
+      fixtureProvider("parlay-api", { remaining: 90, used: 10, last: 1 }),
+    ];
+    const store = createMemoryWorkerStore(["odds-api", "parlay-api"]);
+
+    const cycle = await runScanCycle({ providers, store, ...immediateRetry });
+
+    expect(cycle.sources.map((source) => source.quota)).toEqual([
+      { remaining: 487, used: 13, last: 2 },
+      { remaining: 90, used: 10, last: 1 },
+    ]);
+  });
+
+  it("refuses an empty provider list rather than detecting over stale prices", async () => {
+    await expect(runScanCycle({ providers: [], store: createMemoryWorkerStore() })).rejects.toThrow(
+      /at least one provider/
+    );
   });
 });
 
@@ -134,7 +260,7 @@ describe("createScanWorker", () => {
     };
 
     const worker = createScanWorker({
-      deps: { provider, store },
+      deps: { providers: [provider], store },
       intervalMs: 1000,
       schedule,
       immediate: false,
@@ -209,7 +335,7 @@ describe("createScanWorker", () => {
     };
 
     const worker = createScanWorker({
-      deps: { provider, store },
+      deps: { providers: [provider], store },
       intervalMs: 1000,
       schedule,
       immediate: false,
@@ -267,7 +393,7 @@ describe("createScanWorker", () => {
     };
     const store = createMemoryWorkerStore(["mock"]);
 
-    const worker = createScanWorker({ deps: { provider, store }, intervalMs: 1000 });
+    const worker = createScanWorker({ deps: { providers: [provider], store }, intervalMs: 1000 });
     worker.start();
 
     let settled = false;
@@ -327,10 +453,10 @@ describe("runScanCycle quota reporting", () => {
     const provider = providerReporting({ remaining: 487, used: 13, last: 4 });
     const store = createMemoryWorkerStore(["mock"]);
 
-    const result = await runScanCycle({ provider, store, ...immediateRetry });
+    const result = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     expect(result.status).toBe("OK");
-    expect(result.quota).toEqual({ remaining: 487, used: 13, last: 4 });
+    expect(result.sources[0]?.quota).toEqual({ remaining: 487, used: 13, last: 4 });
   });
 
   it("carries the balance out on a failed cycle, which is the whole point", async () => {
@@ -340,23 +466,23 @@ describe("runScanCycle quota reporting", () => {
     const provider = failingProviderReporting({ remaining: 0, used: 500, last: undefined });
     const store = createMemoryWorkerStore(["mock"]);
 
-    const result = await runScanCycle({ provider, store, ...immediateRetry });
+    const result = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     expect(result.status).toBe("DOWN");
     // remaining=0 on a 401 is the difference between "plan exhausted, raise the
     // interval" and "the key is wrong" - same status, opposite response.
-    expect(result.quota).toEqual({ remaining: 0, used: 500, last: undefined });
+    expect(result.sources[0]?.quota).toEqual({ remaining: 0, used: 500, last: undefined });
   });
 
   it("reports null, not a fabricated zero, when the provider reports nothing", async () => {
     const provider = providerReporting(undefined);
     const store = createMemoryWorkerStore(["mock"]);
 
-    const result = await runScanCycle({ provider, store, ...immediateRetry });
+    const result = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
     // A zero here would read as "out of quota" for the mock provider, which is
     // both false and alarming.
-    expect(result.quota).toBeNull();
+    expect(result.sources[0]?.quota).toBeNull();
   });
 
   it("tolerates a provider with no quota capability at all", async () => {
@@ -372,8 +498,8 @@ describe("runScanCycle quota reporting", () => {
     };
     const store = createMemoryWorkerStore(["mock"]);
 
-    const result = await runScanCycle({ provider, store, ...immediateRetry });
+    const result = await runScanCycle({ providers: [provider], store, ...immediateRetry });
 
-    expect(result.quota).toBeNull();
+    expect(result.sources[0]?.quota).toBeNull();
   });
 });

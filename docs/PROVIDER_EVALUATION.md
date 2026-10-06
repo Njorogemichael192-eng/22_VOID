@@ -116,3 +116,26 @@ Nothing changed the Phase 3 decision. The Odds API remains the initial
 provider; ParlayAPI remains "Provider B" (Phase 19) pending exact wire-shape
 verification and commercial terms. Phase 19 will also re-check the Asian
 quarter-line coverage gap above.
+
+**Phase 19 status.** Provider B is wired **and exercised live**. On
+2026-10-06 one cycle polled `odds-api,parlay-api`: both sources returned `OK`,
+`scanner_health` recorded a `HEALTHY` row per source, detection ran once over
+the combined prices, and the cycle reported `OK`. The adapter
+(`packages/provider-contracts/src/adapters/parlay-api.ts`) is unchanged — the
+acceptance requirement was that a second provider needs no core-engine change,
+and it did not; 22 of its selections were priced in that cycle.
+
+Two things remain open rather than proven:
+
+- **Quota visibility.** ParlayAPI publishes no request-count headers, so the
+  worker reports `quota: unreported` for that source and the balance has to be
+  read from its dashboard. The Odds API side self-reports; this one does not.
+- **Commercial terms.** The free tier is non-commercial/personal and the regions
+  are us-centric, so a commercial deployment would need the Business plan first.
+  Requesting `us` returned data, so the region is usable — the question is
+  terms, not reach.
+
+`PARLAY_API_KEY` was rotated for this: the Phase 3 key was revoked by the
+credential-leak runbook, and the replacement was accepted by `validate-env.sh`
+(the ParlayAPI check enforces presence and shape only, never a length the
+issuer does not publish).

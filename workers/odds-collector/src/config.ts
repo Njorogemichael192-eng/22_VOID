@@ -1,16 +1,30 @@
-import { type OddsApiProviderConfig } from "@22void/provider-contracts";
+import {
+  type OddsApiProviderConfig,
+  type ParlayApiProviderConfig,
+} from "@22void/provider-contracts";
 import { URL } from "node:url";
 
 export type WorkerEnvironment = Readonly<Record<string, string | undefined>>;
 
 export type ResolvedProviderConfig =
-  { readonly kind: "mock" } | { readonly kind: "odds-api"; readonly config: OddsApiProviderConfig };
+  | { readonly kind: "mock" }
+  | { readonly kind: "odds-api"; readonly config: OddsApiProviderConfig }
+  | { readonly kind: "parlay-api"; readonly config: ParlayApiProviderConfig };
+
+/** Provider names `WORKER_PROVIDER` accepts, in the order they are documented. */
+export const PROVIDER_NAMES = ["mock", "odds-api", "parlay-api"] as const;
 
 export type ResolvedStoreConfig =
   { readonly kind: "postgres"; readonly databaseUrl: string } | { readonly kind: "memory" };
 
 export interface ResolvedWorkerConfig {
-  readonly provider: ResolvedProviderConfig;
+  /**
+   * Every provider configured for this worker, in the order listed. A single
+   * provider is the common case and yields a one-element list; the list form is
+   * what makes `WORKER_PROVIDER=odds-api,parlay-api` and Provider C a
+   * configuration change rather than a runtime change.
+   */
+  readonly providers: readonly ResolvedProviderConfig[];
   readonly store: ResolvedStoreConfig;
 }
 
@@ -55,19 +69,23 @@ function optionalProviderValue(
 const CREDENTIAL_QUERY_PARAM =
   /^(api[-_]?key|key|token|access[-_]?token|password|secret|sig|signature)$/i;
 
-function resolveBaseUrl(raw: string | undefined, production: boolean): string | undefined {
+function resolveBaseUrl(
+  name: string,
+  raw: string | undefined,
+  production: boolean
+): string | undefined {
   if (raw === undefined) return undefined;
   const value = raw.trim();
-  if (value === "") invalidConfig("ODDS_API_BASE_URL", "a non-empty URL");
+  if (value === "") invalidConfig(name, "a non-empty URL");
 
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
-    return invalidConfig("ODDS_API_BASE_URL", "a valid URL");
+    return invalidConfig(name, "a valid URL");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    invalidConfig("ODDS_API_BASE_URL", "an http or https URL");
+    invalidConfig(name, "an http or https URL");
   }
 
   // A production provider URL carries a live API key on every request, so the
@@ -75,7 +93,7 @@ function resolveBaseUrl(raw: string | undefined, production: boolean): string | 
   // a local stub, which is the only place it is ever legitimate.
   if (production && parsed.protocol !== "https:") {
     invalidConfig(
-      "ODDS_API_BASE_URL",
+      name,
       "an https:// URL in production (the provider key is sent on every request; " +
         "http:// is only allowed outside production, e.g. a local test stub)"
     );
@@ -84,16 +102,19 @@ function resolveBaseUrl(raw: string | undefined, production: boolean): string | 
   // Embedded userinfo is a credential in the URL by another name, and survives
   // in logs, .env files and process listings. Never legitimate.
   if (parsed.username !== "" || parsed.password !== "") {
-    invalidConfig("ODDS_API_BASE_URL", "a URL without embedded credentials (no user:password@)");
+    invalidConfig(name, "a URL without embedded credentials (no user:password@)");
   }
 
   // A key smuggled into the base URL's query string would defeat header auth
   // entirely, so refuse it rather than let the two mechanisms coexist silently.
-  for (const name of parsed.searchParams.keys()) {
-    if (CREDENTIAL_QUERY_PARAM.test(name)) {
+  for (const param of parsed.searchParams.keys()) {
+    if (CREDENTIAL_QUERY_PARAM.test(param)) {
       invalidConfig(
-        "ODDS_API_BASE_URL",
-        "a URL without a credential query parameter; pass the key via ODDS_API_KEY instead"
+        name,
+        `a URL without a credential query parameter; pass the key via ${name.replace(
+          "_BASE_URL",
+          "_KEY"
+        )} instead`
       );
     }
   }
@@ -115,48 +136,103 @@ function mockProviderAllowed(env: WorkerEnvironment): boolean {
   return (env[ALLOW_MOCK_PROVIDER_ENV] ?? "").trim().toLowerCase() === "true";
 }
 
-export function resolveProviderConfig(
+/**
+ * Resolve every provider `WORKER_PROVIDER` names, in list order.
+ *
+ * The value is a comma-separated list (`odds-api` or `odds-api,parlay-api`)
+ * because Phase 19 is multi-provider: one cycle polls all of them and detection
+ * runs once over the combined prices, which is the only way a cross-provider
+ * arbitrage can be found. A single name is the common case and yields a
+ * one-element list, so nothing about the shape changes when just one is set.
+ */
+export function resolveProviderConfigs(
   env: WorkerEnvironment = process.env
-): ResolvedProviderConfig {
+): readonly ResolvedProviderConfig[] {
   const production = isProductionEnvironment(env);
-  const configuredProvider = env.WORKER_PROVIDER;
+  const raw = env.WORKER_PROVIDER;
 
-  if (production && !hasText(configuredProvider)) {
+  if (production && !hasText(raw)) {
     // The default is `mock`, and production requires an explicit choice precisely
     // because that default fabricates data.
-    invalidConfig("WORKER_PROVIDER", "odds-api (the mock provider is refused in production)");
-  }
-  if (
-    configuredProvider !== undefined &&
-    configuredProvider !== "mock" &&
-    configuredProvider !== "odds-api"
-  ) {
-    throw new Error(`Unknown WORKER_PROVIDER=${configuredProvider}`);
+    invalidConfig(
+      "WORKER_PROVIDER",
+      "odds-api and/or parlay-api, comma-separated (the mock provider is refused in production)"
+    );
   }
 
-  const providerKind = configuredProvider ?? "mock";
-  if (providerKind !== "odds-api") {
-    if (production && !mockProviderAllowed(env)) {
-      // The damaging combination is mock + production + DATABASE_URL: the store
-      // resolves to postgres, so synthetic odds are persisted and then read back
-      // and served as genuine opportunities. Nothing about that state looks wrong
-      // from the outside - the cycles succeed and the worker reports healthy.
-      throw new Error(
-        "Refusing to run WORKER_PROVIDER=mock in production: it fabricates odds, and with " +
-          "DATABASE_URL set those synthetic rows are persisted and served as real opportunities. " +
-          "Set WORKER_PROVIDER=odds-api, or set " +
-          `${ALLOW_MOCK_PROVIDER_ENV}=true if this is deliberately a demo.`
+  const names = (raw ?? "mock").split(",").map((part) => part.trim());
+
+  for (const name of names) {
+    if (name === "") {
+      // Dropping an empty segment would poll fewer providers than the operator
+      // asked for while still reporting a healthy cycle - a silently narrowed
+      // request is the same defect class as a knob that does nothing.
+      invalidConfig(
+        "WORKER_PROVIDER",
+        `a comma-separated list with no empty entries, e.g. "odds-api" or "odds-api,parlay-api" (got ${JSON.stringify(raw)})`
       );
     }
-    return { kind: "mock" };
   }
 
+  const unknown = names.find((name) => !(PROVIDER_NAMES as readonly string[]).includes(name));
+  if (unknown !== undefined) {
+    throw new Error(
+      `Unknown WORKER_PROVIDER=${unknown}; expected one of: ${PROVIDER_NAMES.join(", ")}`
+    );
+  }
+
+  if (new Set(names).size !== names.length) {
+    throw new Error(
+      `Duplicate provider in WORKER_PROVIDER=${raw}: each may be listed once. ` +
+        "A repeat polls the same feed twice in one cycle and spends its quota twice."
+    );
+  }
+
+  if (names.length > 1 && names.includes("mock")) {
+    throw new Error(
+      `Invalid WORKER_PROVIDER=${raw}: mock cannot be combined with a real provider. ` +
+        "Its prices are fabricated, so mixing it with a live feed would place invented " +
+        "odds beside real ones in a single detection pass and report arbitrage that " +
+        "does not exist."
+    );
+  }
+
+  if (production && names[0] === "mock" && !mockProviderAllowed(env)) {
+    // The damaging combination is mock + production + DATABASE_URL: the store
+    // resolves to postgres, so synthetic odds are persisted and then read back
+    // and served as genuine opportunities. Nothing about that state looks wrong
+    // from the outside - the cycles succeed and the worker reports healthy.
+    throw new Error(
+      "Refusing to run WORKER_PROVIDER=mock in production: it fabricates odds, and with " +
+        "DATABASE_URL set those synthetic rows are persisted and served as real opportunities. " +
+        "Set WORKER_PROVIDER to a real provider (odds-api, parlay-api), or set " +
+        `${ALLOW_MOCK_PROVIDER_ENV}=true if this is deliberately a demo.`
+    );
+  }
+
+  return names.map((name) => resolveOneProvider(name, env, production));
+}
+
+function resolveOneProvider(
+  name: string,
+  env: WorkerEnvironment,
+  production: boolean
+): ResolvedProviderConfig {
+  if (name === "mock") return { kind: "mock" };
+  if (name === "odds-api") return resolveOddsApiProvider(env, production);
+  return resolveParlayApiProvider(env, production);
+}
+
+function resolveOddsApiProvider(
+  env: WorkerEnvironment,
+  production: boolean
+): Extract<ResolvedProviderConfig, { kind: "odds-api" }> {
   const apiKey = env.ODDS_API_KEY?.trim();
   if (apiKey === undefined || apiKey === "") {
     throw new Error("WORKER_PROVIDER=odds-api requires a non-empty ODDS_API_KEY");
   }
 
-  const baseUrl = resolveBaseUrl(env.ODDS_API_BASE_URL, production);
+  const baseUrl = resolveBaseUrl("ODDS_API_BASE_URL", env.ODDS_API_BASE_URL, production);
   const regions = optionalProviderValue(env, "ODDS_API_REGIONS", production);
   const markets = optionalProviderValue(env, "ODDS_API_MARKETS", production);
   const defaultSportKey = optionalProviderValue(env, "ODDS_API_SPORT", production);
@@ -176,6 +252,30 @@ export function resolveProviderConfig(
   return { kind: "odds-api", config };
 }
 
+function resolveParlayApiProvider(
+  env: WorkerEnvironment,
+  production: boolean
+): Extract<ResolvedProviderConfig, { kind: "parlay-api" }> {
+  const apiKey = env.PARLAY_API_KEY?.trim();
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error("WORKER_PROVIDER=parlay-api requires a non-empty PARLAY_API_KEY");
+  }
+
+  const baseUrl = resolveBaseUrl("PARLAY_API_BASE_URL", env.PARLAY_API_BASE_URL, production);
+  const regions = optionalProviderValue(env, "PARLAY_API_REGIONS", production);
+  const markets = optionalProviderValue(env, "PARLAY_API_MARKETS", production);
+  const defaultSportKey = optionalProviderValue(env, "PARLAY_API_SPORT", production);
+  const config: ParlayApiProviderConfig = {
+    apiKey,
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(regions === undefined ? {} : { regions }),
+    ...(markets === undefined ? {} : { markets }),
+    ...(defaultSportKey === undefined ? {} : { defaultSportKey }),
+  };
+
+  return { kind: "parlay-api", config };
+}
+
 export function resolveStoreConfig(env: WorkerEnvironment = process.env): ResolvedStoreConfig {
   const production = isProductionEnvironment(env);
   const databaseUrl = env.DATABASE_URL?.trim();
@@ -188,7 +288,7 @@ export function resolveStoreConfig(env: WorkerEnvironment = process.env): Resolv
 
 export function resolveWorkerConfig(env: WorkerEnvironment = process.env): ResolvedWorkerConfig {
   return {
-    provider: resolveProviderConfig(env),
+    providers: resolveProviderConfigs(env),
     store: resolveStoreConfig(env),
   };
 }

@@ -148,18 +148,19 @@ describe("Phase 17 integration regression: runScanCycle operator loop", () => {
   it("a full scan cycle polls, captures raw payload, normalizes, persists, detects, beats", async () => {
     const store = createMemoryWorkerStore(["mock"]);
     const cycle = await runScanCycle({
-      provider: new MockProvider(() => RECEIVED_AT),
+      providers: [new MockProvider(() => RECEIVED_AT)],
       store,
       workerName: "reg-worker",
     });
 
     expect(cycle.status).toBe("OK");
-    expect(cycle.provider).toBe("mock");
+    expect(cycle.sources).toHaveLength(1);
+    expect(cycle.sources[0]?.provider).toBe("mock");
     expect(cycle.collect.events).toBeGreaterThan(0);
     expect(cycle.collect.selections).toBeGreaterThan(0);
     expect(cycle.detection?.priced).toBeGreaterThan(0);
     expect(cycle.detection?.scans).toBeGreaterThan(0);
-    expect(cycle.sourceStatus).toBe("HEALTHY");
+    expect(cycle.sources[0]?.sourceStatus).toBe("HEALTHY");
 
     expect(store.debugRawPayloads()).toHaveLength(1);
     const heartbeats = store.debugHeartbeats();

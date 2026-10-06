@@ -2,13 +2,20 @@
  * odds-collector entrypoint (Phase 14).
  *
  * Env-driven:
- *   WORKER_PROVIDER              mock (default) | odds-api   (mock is REFUSED under NODE_ENV=production)
+ *   WORKER_PROVIDER              comma list of providers, one cycle polls each
+ *                                (default: mock; mock is REFUSED under
+ *                                NODE_ENV=production and cannot be combined with
+ *                                a real provider)
+ *                                e.g. `odds-api` or `odds-api,parlay-api`
  *   ALLOW_MOCK_PROVIDER_IN_PRODUCTION  true                deliberate demo only; overrides the refusal
  *   ODDS_API_KEY / ODDS_API_BASE_URL             (odds-api provider)
+ *   ODDS_API_REGIONS / ODDS_API_MARKETS / ODDS_API_SPORT   per-request selection
+ *   PARLAY_API_KEY / PARLAY_API_BASE_URL         (parlay-api provider)
+ *   PARLAY_API_REGIONS / PARLAY_API_MARKETS / PARLAY_API_SPORT
  *   DATABASE_URL                 when set, uses the Postgres store; otherwise in-memory
  *   SCANNER_POLL_INTERVAL_MS     cycle interval in ms (default 15000)
- *                                 must not exceed WORKER_STALENESS_MS; refused at
- *                                 startup otherwise (see config.ts)
+ *                                must not exceed WORKER_STALENESS_MS; refused at
+ *                                startup otherwise (see config.ts)
  *   RATE_LIMIT_CAPACITY          token bucket size (default 10)
  *   RATE_LIMIT_REFILL_PER_SECOND refill rate (default 5)
  *   WORKER_HEALTH_PORT           liveness/metrics endpoint port (default 8081)
@@ -17,8 +24,9 @@
 
 import "dotenv/config";
 
-import { MockProvider, OddsApiProvider } from "@22void/provider-contracts";
+import { MockProvider, OddsApiProvider, ParlayApiProvider } from "@22void/provider-contracts";
 import { formatProviderQuota } from "@22void/provider-contracts";
+import type { OddsProvider } from "@22void/provider-contracts";
 import { createPrismaClient } from "@22void/db";
 
 import {
@@ -46,8 +54,9 @@ function numberEnv(name: string, fallback: number): number {
   return value;
 }
 
-function createProvider(config: ResolvedProviderConfig): MockProvider | OddsApiProvider {
+function createProvider(config: ResolvedProviderConfig): OddsProvider {
   if (config.kind === "odds-api") return new OddsApiProvider(config.config);
+  if (config.kind === "parlay-api") return new ParlayApiProvider(config.config);
   return new MockProvider();
 }
 
@@ -59,8 +68,12 @@ function createProvider(config: ResolvedProviderConfig): MockProvider | OddsApiP
  * tidy arbitrage that does not exist. The store label is in the banner on purpose
  * — synthetic odds landing in postgres are the case that matters.
  */
-function warnOnSyntheticProductionData(provider: ResolvedProviderConfig, storeLabel: string): void {
-  if (provider.kind !== "mock" || !isProductionEnvironment()) return;
+function warnOnSyntheticProductionData(
+  providers: readonly ResolvedProviderConfig[],
+  storeLabel: string
+): void {
+  if (!providers.some((provider) => provider.kind === "mock")) return;
+  if (!isProductionEnvironment()) return;
   const width = 74;
   const line = (text: string): string => `  # ${text.padEnd(width - 4)}#`;
   console.warn(
@@ -136,9 +149,9 @@ async function main(): Promise<void> {
     intervalMs,
     staleAfterMs: healthConfig.staleAfterMs,
   });
-  const provider = createProvider(resolved.provider);
+  const providers = resolved.providers.map(createProvider);
   const { store, label } = createStore(resolved.store);
-  warnOnSyntheticProductionData(resolved.provider, label);
+  warnOnSyntheticProductionData(resolved.providers, label);
   const capacity = numberEnv("RATE_LIMIT_CAPACITY", 10);
   const refillPerSecond = numberEnv("RATE_LIMIT_REFILL_PER_SECOND", 5);
   const rateLimiter = new TokenBucketRateLimiter({ capacity, refillPerSecond });
@@ -147,12 +160,15 @@ async function main(): Promise<void> {
     ...healthConfig,
   });
 
+  // The configured list, not just the instances: a two-provider cycle spends two
+  // provider quotas per poll, and the startup line is where that is meant to be
+  // noticed.
   console.log(
-    `[odds-collector] starting provider=${provider.providerKey} store=${label} intervalMs=${intervalMs} rate=${capacity}/${refillPerSecond}`
+    `[odds-collector] starting provider=${resolved.providers.map((p) => p.kind).join(",")} store=${label} intervalMs=${intervalMs} rate=${capacity}/${refillPerSecond}`
   );
 
   const worker = createScanWorker({
-    deps: { provider, store, rateLimiter },
+    deps: { providers, store, rateLimiter },
     intervalMs,
     schedule: nativeScheduler(),
     immediate: true,
@@ -164,15 +180,22 @@ async function main(): Promise<void> {
       }
       healthState.recordCycle(result.status);
       console.log(`[odds-collector] ${result.status}`, {
-        provider: result.provider,
+        sources: result.sources.map((source) => ({
+          provider: source.provider,
+          status: source.status,
+          receivedAt: source.receivedAt,
+          attempts: source.attempts,
+          // Credit balance for this poll. `unreported` means the provider sent no
+          // quota headers - which is expected for the mock provider and would be a
+          // gap worth noticing for a metered one, because it means the budget is
+          // invisible. `last` is the per-poll cost, so a change in markets or
+          // regions shows up here as a change in the price of one poll.
+          quota: formatProviderQuota(source.quota),
+          collect: source.collect,
+          error: source.error,
+        })),
         receivedAt: result.receivedAt,
         attempts: result.attempts,
-        // Credit balance for this cycle. `unreported` means the provider sent no
-        // quota headers - which is expected for the mock provider and would be a
-        // gap worth noticing for a metered one, because it means the budget is
-        // invisible. `last` is the per-poll cost, so a change in markets or
-        // regions shows up here as a change in the price of one poll.
-        quota: formatProviderQuota(result.quota),
         collect: result.collect,
         normalized: result.normalized.map(
           (entry) => `${entry.action}:${entry.canonicalEventId}@${entry.confidence.toFixed(2)}`

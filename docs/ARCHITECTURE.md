@@ -53,13 +53,22 @@ Background:                                |
 
 Rule: provider-specific logic stays in adapters under `provider-contracts`; the core engine never imports provider internals.
 
-## Worker scan cycle (Phase 14)
+## Worker scan cycle (Phases 14, 19)
 
 `workers/odds-collector` runs one operator loop per interval (`npm run worker:collect`
-→ `src/main.ts`, `createScanWorker` in `src/runtime.ts`). Each `runScanCycle`:
+→ `src/main.ts`, `createScanWorker` in `src/runtime.ts`). `WORKER_PROVIDER` is a
+comma-separated list, and each `runScanCycle` polls **every provider it names, in
+order, then detects once over the combined prices**.
 
-1. **Heartbeat** the run is starting (`recordHeartbeat`, status `HEALTHY`).
-2. **Rate-limit** — token bucket (`src/rate-limit.ts`) so a provider's quota is never exceeded.
+Per provider, in list order:
+
+1. **Heartbeat** — one `scanner_health` row opened for this provider
+   (`recordHeartbeat`, status `HEALTHY`, `oddsSourceId` set). One row *per provider
+   per cycle*, not one per cycle: `sourceLatencyStats` groups by `oddsSourceId`, so a
+   second provider with no row of its own would have no latency history at all and
+   `/api/v1/history/latency` would silently cover only the first feed.
+2. **Rate-limit** — token bucket (`src/rate-limit.ts`), shared across providers, so
+   the combined request rate never exceeds what the operator configured.
 3. **Poll** with retry/backoff (`src/retry.ts`): 429/5xx/network errors are transient and
    retried (4 attempts, exponential ±50% jitter); permanent 4xx re-raise immediately.
 4. **Raw payload capture** (§65): the verbatim provider response is stored via
@@ -70,9 +79,16 @@ Rule: provider-specific logic stays in adapters under `provider-contracts`; the 
    `(oddsSourceId, sourceMarketId)` and a provider may reuse a market id across events,
    the persisted `sourceMarketId` is the provider's canonical composite
    `${providerEventId}:${sourceMarketId}`. Unrepresentable records are counted as
-   `invalid`, never guessed.
+   `invalid`, never guessed. `loadEventSeeds` is read *inside* the provider loop, so a
+   second provider resumes from the first provider's bindings — the same match arriving
+   from two feeds folds into one canonical event rather than becoming two.
 6. **Persist** via `@22void/db` (`persistCanonicalRun`: events → source bindings →
-   settlement rules → markets → selections; idempotent upserts).
+   settlement rules → markets → selections; idempotent upserts), and this provider's
+   source availability is written: `HEALTHY` before the store writes, `DOWN` on a poll
+   that failed after its retries, `DEGRADED` when processing failed after the poll.
+
+Then, once for the whole cycle:
+
  7. **Detect** (`src/detect.ts`): reads the fresh priced selections, applies spec §55
     best-price bookmaker selection per generation group (`eventId|period`), runs the Phase 10
     `scanCandidates` + Phase 11 `validateCandidate` pipeline, and persists every ARB scan's
@@ -80,21 +96,45 @@ Rule: provider-specific logic stays in adapters under `provider-contracts`; the 
     (`persistOpportunity`). The §39 recheck is served by the cycle itself: current prices
     *are* the recheck, so scans are self-consistent. Candidate generation is bounded by
     `maxCandidates` (default `DEFAULT_MAX_CANDIDATES` = 20 000) and the summary reports
-    `capped`, so a truncated search is distinguishable from an exhausted one.
-8. **Availability + heartbeat**: a successful cycle marks the source `HEALTHY`; a failed
-   poll marks it `DOWN`. The very next successful cycle flips it back — the worker
-   acceptance model is *transient provider failures recover*.
+    `capped`, so a truncated search is distinguishable from an exhausted one. It runs
+    **after the last provider has persisted and only once**, because an arbitrage between
+    a book on one provider and a book on another exists only once both feeds are in the
+    store — running it per provider would compare each feed against itself. `now` is the
+    freshest envelope in the cycle, so a slower provider cannot flatter a faster
+    provider's prices.
+ 8. **Reconcile** opportunity episodes (Phase 15 sweep/restore), also once per cycle.
+
+Each provider's still-open heartbeat row is then closed with that detection summary in
+its `message`, while `finishedAt` stays pinned to the moment *that provider's* persist
+completed — so the latency `sourceLatencyStats` reports remains poll→persist for that
+source instead of absorbing the other providers' polls.
+
+9. **Availability + heartbeat** (per provider): the acceptance model is *transient
+   provider failures recover* — `DOWN` on the next successful poll flips straight back
+   to `HEALTHY`. A detection failure is deliberately **not** written back onto the
+   providers: they delivered their prices, so the sources stay `HEALTHY` and the
+   **cycle** reports `DEGRADED`, which is what `/healthz` consumes.
+
+The cycle's status aggregates the two: all providers alike → that status; any mixture,
+or a detection failure → `DEGRADED`. One feed failing therefore can neither hide the
+prices that arrived nor be hidden by them.
 
 The worker talks to `@22void/db` only through the `WorkerStore` port (`src/store.ts`);
 a Prisma-backed adapter and an in-memory adapter (tests/sandbox) implement it.
 
 ```text
 Scanner loop (workers/odds-collector)
-   poll (rate-limited, retried) -> raw payload §65
-      -> normalize (events/confidence) -> persistCanonicalRun
-      -> detect (scan + validate) -> persistOpportunity
-      -> reconcile opportunity episodes (sweep/restore)
-      -> heartbeat + source availability (HEALTHY/DEGRADED/DOWN)
+   for each provider in WORKER_PROVIDER:
+      heartbeat open (one row per provider per cycle)
+        -> rate-limit (shared) -> poll (retried) -> raw payload §65
+        -> normalize (events/confidence, seeds re-read per provider)
+        -> persistCanonicalRun -> source availability
+        -> heartbeat close (finishedAt = this provider's persist)
+   then once:
+        detect (scan + validate, combined prices) -> persistOpportunity
+        -> reconcile opportunity episodes (sweep/restore)
+        -> close each provider's heartbeat message with the detection summary
+   cycle status = OK | DEGRADED | DOWN (see aggregate rule above)
 ```
 
 **Freshness is measured against price age, not poll age — so at the current cadence

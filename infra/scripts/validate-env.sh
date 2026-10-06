@@ -54,6 +54,18 @@ validate_odds_api_key() {
   [ "${#ODDS_API_KEY}" -eq 32 ] || fail "ODDS_API_KEY must be exactly 32 characters (got ${#ODDS_API_KEY}) - The Odds API issues fixed-length keys, so any other length is a truncated paste or the wrong credential"
 }
 
+# ParlayAPI publishes no fixed key length, so this only guarantees the value is
+# present and intact rather than inventing a floor the issuer does not honour.
+# A truncated key still fails at the provider as a 401 with no quota reading,
+# which the worker surfaces as that source DOWN.
+validate_parlay_api_key() {
+  parlay_key_value=${PARLAY_API_KEY:-}
+  require_value PARLAY_API_KEY "$parlay_key_value"
+  case "$parlay_key_value" in
+    *[[:space:]]*) fail "PARLAY_API_KEY must not contain whitespace" ;;
+  esac
+}
+
 validate_positive_integer() {
   integer_name=$1
   integer_value=${2:-}
@@ -73,8 +85,8 @@ validate_base_url() {
     *) fail "$base_url_name must use https" ;;
   esac
   case "$base_url_value" in
-    *[[:space:]]*|*'?'*|*'#'*|*/v4|*/v4/)
-      fail "$base_url_name must be an origin without /v4, query, or fragment"
+    *[[:space:]]*|*'?'*|*'#'*|*/v[0-9]|*/v[0-9]/)
+      fail "$base_url_name must be an origin without a version path, query, or fragment"
       ;;
   esac
   base_url_host=${base_url_value#https://}
@@ -126,18 +138,64 @@ fi
 
 if [ "$role" = worker ]; then
   require_value WORKER_PROVIDER "${WORKER_PROVIDER:-}"
+
+  # WORKER_PROVIDER is a comma-separated list: one cycle polls every provider
+  # named here. Everything below mirrors what config.ts enforces, so the stack
+  # fails once at the entrypoint with a readable message instead of Node
+  # throwing inside a restart:unless-stopped loop.
+  #
+  # An empty segment is checked by shape rather than by iteration: `tr ',' '\n'`
+  # and friends drop the empty field, so `odds-api,` would look like a valid
+  # single-provider list while the worker refuses to start.
   case "$WORKER_PROVIDER" in
-    mock|odds-api) ;;
-    *) fail "WORKER_PROVIDER must be mock or odds-api" ;;
+    ,*|*,|*,,*)
+      fail "WORKER_PROVIDER must be a comma-separated list with no empty entries, e.g. odds-api or odds-api,parlay-api (got: $WORKER_PROVIDER)"
+      ;;
   esac
 
-  if [ "$WORKER_PROVIDER" = odds-api ]; then
-    validate_odds_api_key
-  elif [ -n "${ODDS_API_KEY:-}" ]; then
-    validate_odds_api_key
+  saved_ifs=$IFS
+  IFS=' ,'
+  # Word splitting is the split here; disable pathname expansion so a stray glob
+  # character cannot expand into file names that then read as provider names.
+  set -f
+  # shellcheck disable=SC2086
+  set -- $WORKER_PROVIDER
+  set +f
+  IFS=$saved_ifs
+
+  provider_count=$#
+  wants_mock=0
+  wants_odds_api=0
+  wants_parlay_api=0
+  seen_providers=""
+
+  for provider_name do
+    case "$provider_name" in
+      mock) wants_mock=1 ;;
+      odds-api) wants_odds_api=1 ;;
+      parlay-api) wants_parlay_api=1 ;;
+      *) fail "WORKER_PROVIDER contains unknown provider '$provider_name' (expected: mock, odds-api, parlay-api)" ;;
+    esac
+    case " $seen_providers " in
+      *" $provider_name "*)
+        fail "WORKER_PROVIDER lists '$provider_name' twice - a repeat polls the same feed twice in one cycle and spends its quota twice"
+        ;;
+    esac
+    seen_providers="$seen_providers $provider_name"
+  done
+
+  if [ "$wants_mock" -eq 1 ] && [ "$provider_count" -gt 1 ]; then
+    fail "WORKER_PROVIDER=$WORKER_PROVIDER: mock cannot be combined with a real provider - its prices are fabricated, so mixing it with a live feed places invented odds beside real ones in a single detection pass and reports arbitrage that does not exist"
   fi
 
-  validate_base_url ODDS_API_BASE_URL "${ODDS_API_BASE_URL:-https://api.the-odds-api.com}"
+  if [ "$wants_odds_api" -eq 1 ] || [ -n "${ODDS_API_KEY:-}" ]; then
+    validate_odds_api_key
+    validate_base_url ODDS_API_BASE_URL "${ODDS_API_BASE_URL:-https://api.the-odds-api.com}"
+  fi
+  if [ "$wants_parlay_api" -eq 1 ] || [ -n "${PARLAY_API_KEY:-}" ]; then
+    validate_parlay_api_key
+    validate_base_url PARLAY_API_BASE_URL "${PARLAY_API_BASE_URL:-https://parlay-api.com}"
+  fi
   validate_positive_integer WORKER_HEALTH_PORT "${WORKER_HEALTH_PORT:-8081}"
   validate_positive_integer WORKER_STALENESS_MS "${WORKER_STALENESS_MS:-300000}"
   [ "${WORKER_HEALTH_PORT:-8081}" -le 65535 ] || fail "WORKER_HEALTH_PORT must be at most 65535"

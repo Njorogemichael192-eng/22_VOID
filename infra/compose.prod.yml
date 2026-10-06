@@ -129,6 +129,25 @@ services:
       ODDS_API_REGIONS: ${ODDS_API_REGIONS:-uk,eu}
       ODDS_API_MARKETS: ${ODDS_API_MARKETS:-h2h,totals}
       ODDS_API_SPORT: ${ODDS_API_SPORT:-soccer_epl}
+      # ParlayAPI (Provider B). Unused unless parlay-api appears in
+      # WORKER_PROVIDER - the worker only resolves a provider's key when that
+      # provider is named - so leaving these set costs nothing.
+      #
+      # Key travels in the X-API-Key header, never in the query string.
+      PARLAY_API_KEY: ${PARLAY_API_KEY:-}
+      PARLAY_API_BASE_URL: ${PARLAY_API_BASE_URL:-https://parlay-api.com}
+      # Regions / markets / sport requested on /v1/sports/{sport}/odds. Defaults
+      # match the adapter's own, surfaced here so the request is visible and
+      # overridable the same way ODDS_API_* now is.
+      #
+      # QUOTA: ParlayAPI's balance is entirely separate from The Odds API's, so
+      # polling it does not draw down ODDS_API credits - but it does add one
+      # provider request per cycle, and its free allowance is documented as
+      # non-commercial/personal use only (docs/PROVIDER_EVALUATION.md). Set this
+      # only deliberately.
+      PARLAY_API_REGIONS: ${PARLAY_API_REGIONS:-us}
+      PARLAY_API_MARKETS: ${PARLAY_API_MARKETS:-h2h_3_way,totals}
+      PARLAY_API_SPORT: ${PARLAY_API_SPORT:-soccer_epl}
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in infra/.env.prod}
       SCANNER_POLL_INTERVAL_MS: ${SCANNER_POLL_INTERVAL_MS:-15000}
       RATE_LIMIT_CAPACITY: ${RATE_LIMIT_CAPACITY:-10}
