@@ -20,25 +20,39 @@
  *   RATE_LIMIT_REFILL_PER_SECOND refill rate (default 5)
  *   WORKER_HEALTH_PORT           liveness/metrics endpoint port (default 8081)
  *   WORKER_STALENESS_MS          age past which a cycle is "stale" (default 300000)
+ *   ALERT_WEBHOOK_URL            if set, POST health alert events here (https in
+ *                                production); unset leaves alerting off
+ *   ALERT_MIN_SEVERITY           floor to emit: info|warning|critical (warning)
+ *   ALERT_RENOTIFY_MS            re-notify a still-firing condition this often
+ *                                (default 1800000; 0 = fire once, then resolve)
+ *   ALERT_HYSTERESIS             consecutive unhealthy checks before firing (1)
+ *   ALERT_CHECK_INTERVAL_MS      how often the alert watchdog runs (default 30000)
  */
 
 import "dotenv/config";
 
-import { MockProvider, OddsApiProvider, ParlayApiProvider } from "@22void/provider-contracts";
+import { MockProvider, OddsApiProvider, ParlayApiProvider, ExampleProvider } from "@22void/provider-contracts";
 import { formatProviderQuota } from "@22void/provider-contracts";
 import type { OddsProvider } from "@22void/provider-contracts";
+import type { SourceSignal } from "@22void/alerting";
 import { createPrismaClient } from "@22void/db";
 
 import {
   ALLOW_MOCK_PROVIDER_ENV,
   assertIntervalWithinStaleness,
   isProductionEnvironment,
+  resolveAlertConfig,
   resolveHealthConfig,
   resolveScanIntervalMs,
   resolveWorkerConfig,
   type ResolvedProviderConfig,
   type ResolvedStoreConfig,
 } from "./config.js";
+import {
+  buildHealthSnapshot,
+  createAlertNotifierFromConfig,
+  sourceSignals,
+} from "./alerts.js";
 import { createHealthServer, createWorkerHealthState, type WorkerHealthState } from "./health.js";
 import { TokenBucketRateLimiter } from "./rate-limit.js";
 import { createScanWorker, nativeScheduler } from "./runtime.js";
@@ -57,6 +71,7 @@ function numberEnv(name: string, fallback: number): number {
 function createProvider(config: ResolvedProviderConfig): OddsProvider {
   if (config.kind === "odds-api") return new OddsApiProvider(config.config);
   if (config.kind === "parlay-api") return new ParlayApiProvider(config.config);
+  if (config.kind === "example") return new ExampleProvider(config.config);
   return new MockProvider();
 }
 
@@ -141,6 +156,7 @@ const processStartedAt = Date.now();
 async function main(): Promise<void> {
   const resolved = resolveWorkerConfig();
   const healthConfig = resolveHealthConfig();
+  const alertConfig = resolveAlertConfig();
   // Refused before anything is constructed or any provider call is made: an
   // interval above the staleness ceiling is a configuration error, and starting
   // up "successfully" into a permanently unhealthy container hides it.
@@ -167,6 +183,12 @@ async function main(): Promise<void> {
     `[odds-collector] starting provider=${resolved.providers.map((p) => p.kind).join(",")} store=${label} intervalMs=${intervalMs} rate=${capacity}/${refillPerSecond}`
   );
 
+  // The latest per-source signals, updated each cycle; the alert check reads this
+  // alongside the worker health state. `observeAlerts` is a no-op until alerting
+  // is wired below, so the onRun callback can call it unconditionally.
+  let latestSources: readonly SourceSignal[] = [];
+  let observeAlerts: () => void = () => {};
+
   const worker = createScanWorker({
     deps: { providers, store, rateLimiter },
     intervalMs,
@@ -176,9 +198,11 @@ async function main(): Promise<void> {
       if (result === null) {
         healthState.recordCycle("ERROR");
         console.error("[odds-collector] cycle failed:", error);
+        observeAlerts();
         return;
       }
       healthState.recordCycle(result.status);
+      latestSources = sourceSignals(result, Date.now());
       console.log(`[odds-collector] ${result.status}`, {
         sources: result.sources.map((source) => ({
           provider: source.provider,
@@ -203,8 +227,31 @@ async function main(): Promise<void> {
         detection: result.detection,
         error: result.error,
       });
+      observeAlerts();
     },
   });
+
+  // Alerting is opt-in: with no webhook configured the notifier is null and
+  // `observeAlerts` stays a no-op, so the common case costs nothing. The timer is
+  // what catches a *stalled* worker, which no per-cycle evaluation can see.
+  let alertTimer: ReturnType<typeof setInterval> | null = null;
+  const alertNotifier = createAlertNotifierFromConfig(alertConfig);
+  if (alertNotifier !== null) {
+    observeAlerts = () => {
+      void alertNotifier.observe(
+        buildHealthSnapshot({
+          health: healthState.snapshot(worker.runCount()),
+          sources: latestSources,
+          now: Date.now(),
+        })
+      );
+    };
+    alertTimer = setInterval(() => observeAlerts(), alertConfig.checkIntervalMs);
+    alertTimer.unref?.();
+    console.log(
+      `[odds-collector] alerting enabled: webhook minSeverity=${alertConfig.minSeverity} renotifyMs=${alertConfig.renotifyMs} checkIntervalMs=${alertConfig.checkIntervalMs}`
+    );
+  }
 
   const healthServer = startHealthServer(healthState, () => worker.runCount());
 
@@ -212,6 +259,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     console.log(`[odds-collector] ${signal} received, stopping...`);
+    if (alertTimer !== null) clearInterval(alertTimer);
     healthServer.close();
     void worker.stop().then(() => process.exit(0));
   };

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { OddsApiProvider, ParlayApiProvider, MockProvider, buildMockEnvelope } from "./index.js";
+import { OddsApiProvider, ParlayApiProvider, ExampleProvider, MockProvider, buildMockEnvelope } from "./index.js";
 import { providerKeySchema } from "./provider-id.js";
 import { providerEnvelopeSchema } from "./envelope.js";
 
@@ -9,6 +9,7 @@ describe("@22void/provider-contracts public API", () => {
     expect(providerKeySchema.safeParse("mock").success).toBe(true);
     expect(providerKeySchema.safeParse("odds-api").success).toBe(true);
     expect(providerKeySchema.safeParse("parlay-api").success).toBe(true);
+    expect(providerKeySchema.safeParse("example").success).toBe(true);
     expect(providerKeySchema.safeParse("betfair").success).toBe(false);
   });
 
@@ -23,5 +24,6 @@ describe("@22void/provider-contracts public API", () => {
     expect(new MockProvider()).toBeInstanceOf(MockProvider);
     expect(new OddsApiProvider({ apiKey: "k" }).providerKey).toBe("odds-api");
     expect(new ParlayApiProvider({ apiKey: "k" }).providerKey).toBe("parlay-api");
+    expect(new ExampleProvider({ baseUrl: "http://127.0.0.1:4010" }).providerKey).toBe("example");
   });
 });

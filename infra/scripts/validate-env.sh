@@ -167,6 +167,7 @@ if [ "$role" = worker ]; then
   wants_mock=0
   wants_odds_api=0
   wants_parlay_api=0
+  wants_example=0
   seen_providers=""
 
   for provider_name do
@@ -174,7 +175,8 @@ if [ "$role" = worker ]; then
       mock) wants_mock=1 ;;
       odds-api) wants_odds_api=1 ;;
       parlay-api) wants_parlay_api=1 ;;
-      *) fail "WORKER_PROVIDER contains unknown provider '$provider_name' (expected: mock, odds-api, parlay-api)" ;;
+      example) wants_example=1 ;;
+      *) fail "WORKER_PROVIDER contains unknown provider '$provider_name' (expected: mock, odds-api, parlay-api, example)" ;;
     esac
     case " $seen_providers " in
       *" $provider_name "*)
@@ -186,6 +188,14 @@ if [ "$role" = worker ]; then
 
   if [ "$wants_mock" -eq 1 ] && [ "$provider_count" -gt 1 ]; then
     fail "WORKER_PROVIDER=$WORKER_PROVIDER: mock cannot be combined with a real provider - its prices are fabricated, so mixing it with a live feed places invented odds beside real ones in a single detection pass and reports arbitrage that does not exist"
+  fi
+
+  # The reference adapter is development-only (config.ts refuses it in production
+  # too): it serves fixture data from docs/ADDING_A_PROVIDER.md, so in a
+  # production stack it would persist invented opportunities. This script is the
+  # production entrypoint gate, so refusing it here is the same refusal.
+  if [ "$wants_example" -eq 1 ]; then
+    fail "WORKER_PROVIDER=$WORKER_PROVIDER: example is the credential-free reference adapter (docs/ADDING_A_PROVIDER.md) and serves fixture data, not a real feed - it is refused in a production stack. Fork it into a real adapter to add a provider"
   fi
 
   if [ "$wants_odds_api" -eq 1 ] || [ -n "${ODDS_API_KEY:-}" ]; then
@@ -215,4 +225,26 @@ if [ "$role" = worker ]; then
   if [ "$poll_interval_ms" -gt "$staleness_ms" ]; then
     fail "SCANNER_POLL_INTERVAL_MS=$poll_interval_ms exceeds WORKER_STALENESS_MS=$staleness_ms - the worker would report itself stale (unhealthy) for the whole gap between every poll. Raise WORKER_STALENESS_MS above SCANNER_POLL_INTERVAL_MS or lower the poll interval."
   fi
+
+  # Health alerting (Phase 19) is opt-in on ALERT_WEBHOOK_URL. An alert names which
+  # feeds are down, so a plain-http webhook is refused here exactly as the worker
+  # refuses it at startup. Only the scheme is checked: the URL legitimately carries
+  # its secret in the path or query (a Slack-style incoming hook).
+  if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
+    case "$ALERT_WEBHOOK_URL" in
+      https://*) ;;
+      *) fail "ALERT_WEBHOOK_URL must be an https:// URL (got: $ALERT_WEBHOOK_URL)" ;;
+    esac
+  fi
+  case "${ALERT_MIN_SEVERITY:-warning}" in
+    info|warning|critical) ;;
+    *) fail "ALERT_MIN_SEVERITY must be one of info, warning, critical (got: ${ALERT_MIN_SEVERITY:-})" ;;
+  esac
+  # A zero re-notify is meaningful (fire once, then only resolve), so it is not a
+  # positive integer like the rest.
+  case "${ALERT_RENOTIFY_MS:-1800000}" in
+    ''|*[!0-9]*) fail "ALERT_RENOTIFY_MS must be a non-negative integer (got: ${ALERT_RENOTIFY_MS:-})" ;;
+  esac
+  validate_positive_integer ALERT_HYSTERESIS "${ALERT_HYSTERESIS:-1}"
+  validate_positive_integer ALERT_CHECK_INTERVAL_MS "${ALERT_CHECK_INTERVAL_MS:-30000}"
 fi

@@ -150,6 +150,28 @@ export const PARLAY_API_MARKET_KEYS: Readonly<Record<string, MarketKeySpec>> = {
   },
 };
 
+/**
+ * Reference provider registry ("example"). This is the market-key map the
+ * provider template in docs/ADDING_A_PROVIDER.md starts from: it maps each
+ * provider-native market key to the canonical taxonomy. A new provider forks
+ * this file's pattern — it is credential-free and intentionally minimal, so it
+ * cannot accidentally claim settlement semantics that were never verified.
+ */
+export const EXAMPLE_MARKET_KEYS: Readonly<Record<string, MarketKeySpec>> = {
+  h2h: {
+    family: MarketFamily.MATCH_RESULT,
+    marketType: MarketType.ONE_X_TWO,
+    period: Period.FULL_MATCH,
+    usesPoint: false,
+  },
+  totals: {
+    family: MarketFamily.MATCH_TOTAL,
+    marketType: MarketType.STANDARD,
+    period: Period.FULL_MATCH,
+    usesPoint: true,
+  },
+};
+
 export function getMarketKeySpec(
   registry: Readonly<Record<string, MarketKeySpec>>,
   key: string

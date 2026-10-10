@@ -93,7 +93,12 @@ Then, once for the whole cycle:
     best-price bookmaker selection per generation group (`eventId|period`), runs the Phase 10
     `scanCandidates` + Phase 11 `validateCandidate` pipeline, and persists every ARB scan's
     outcome (verified/theoretical/stale/rejected) with its audit trail
-    (`persistOpportunity`). The §39 recheck is served by the cycle itself: current prices
+    (`persistOpportunity`). §55 selection is **availability-aware**: the highest price from a
+    *valid* source (`OK`/`DEGRADED`) wins, and a down/unknown source's better price is used
+    only when no valid source quotes the selection — so one stale provider cannot both win
+    the price and then have its leg rejected as `PROVIDER_UNAVAILABLE`, discarding a usable
+    healthy quote, while a selection no healthy source carries is still rejected. The §39
+    recheck is served by the cycle itself: current prices
     *are* the recheck, so scans are self-consistent. Candidate generation is bounded by
     `maxCandidates` (default `DEFAULT_MAX_CANDIDATES` = 20 000) and the summary reports
     `capped`, so a truncated search is distinguishable from an exhausted one. It runs
@@ -153,6 +158,37 @@ is a paid-plan decision (a 15 s cadence burns the 500-credit free plan in hours)
 engine change: the policy stays at 15 s until then, and `STALE` is the expected steady state
 on the free plan.
 
+## Health alerting (Phase 19)
+
+The cycle status (`/healthz`) and per-source availability were produced but
+unconsumed — an operator had to poll and decide by hand. `@22void/alerting` is the
+consumer: a **pure** `evaluateHealthAlerts(snapshot, previous, policy)` folds the
+current signals into alert events, and an `AlertSink` delivers them. The worker
+maps its own statuses into the package's three levels (`HEALTHY`/`DEGRADED`/
+`DOWN`) and runs the evaluator after every cycle plus on a watchdog timer
+(`ALERT_CHECK_INTERVAL_MS`) that reads the *health state*, so a stalled worker
+(the one case a per-cycle check cannot see) still alerts.
+
+Semantics that keep it quiet: it fires on a **transition** into an unhealthy level,
+not on every cycle while it stays unhealthy; it emits a `RESOLVED` on recovery; it
+damps flapping with a consecutive-observation hysteresis; and it escalates
+immediately when a firing condition worsens. Delivery is fail-soft — a dead
+webhook is reported and swallowed, never failing a scan cycle — and the whole
+feature is off unless `ALERT_WEBHOOK_URL` is set, so the common case costs
+nothing. Delivery is the only side effect; the decision is unit-tested.
+
+## Adding a provider (Phase 19)
+
+A provider is an adapter under `provider-contracts` plus wiring; because the
+engine consumes only the normalized envelope, no file under `packages/arbitrage`,
+`packages/db`, `packages/normalization` or `apps/web` changes. The full checklist
+is `docs/ADDING_A_PROVIDER.md`, and a credential-free worked example ships as the
+**`example` provider** (`adapters/example.ts` + `EXAMPLE_MARKET_KEYS`), which is
+refused in production exactly like `mock` because it serves fixture data. The
+name is registered in `provider-id.ts`, resolved in the worker (`config.ts`) and
+instantiated in `main.ts`; once `WORKER_PROVIDER` names it the existing
+multi-provider cycle polls it and folds it into detection with no engine change.
+
 ## Cross-provider event matching (Phase 19, Step 4)
 
 `EventNormalizer.register` already folds the *same* match from two feeds into one
@@ -195,6 +231,55 @@ stamped their prices more than 60s apart therefore surfaces as
 `CROSS_SOURCE_TIMESTAMP_SPREAD` rather than a verified arb — a freshness outcome,
 not a matching defect.
 
+## Cross-provider market matching (Phase 19, Step 5)
+
+The same market (say `MATCH_TOTAL | FULL_MATCH | STANDARD | 2.5`) reaches the
+database once per provider, each with its own opaque `sourceMarketId`. Unlike
+events, this is **not** a scan-cycle-only problem: with two providers enabled, every
+cycle writes both listings. Step 5 therefore folds them on the **write path**, and
+keeps a one-shot CLI only for the legacy rows that predate it.
+
+**Identity.** `Market.canonicalMarketId` is the provider-independent structure key
+`family|period|marketType|participant|line`. Two listings of the same market share
+it; two listings of *different* markets never do (so `MATCH_TOTAL` and `TEAM_TOTAL`
+stay apart, §7). The write path looks a market up by `(eventId, canonicalMarketId)`
+and, when both providers list it, **folds them into one `Market` row**.
+
+**Each provider's original identity is not lost.** A new `market_source_ids` table
+holds one row per `(odds source, sourceMarketId)`, FK to the folded `Market`, its
+`OddsSource` and its `SettlementRule`. `Market`'s own `oddsSourceId` /
+`sourceMarketId` / `settlementRuleId` remain the *primary* listing — the highest
+priority provider (`odds-api` > `parlay-api`) — so market-level reads are unchanged.
+
+**Provenance had to move to the selection.** Before Step 5 a selection's provider
+and settlement confidence were inferred from its parent `Market`. Folding N listings
+into one row would have made all of them inherit the winner's status — exactly the
+misattribution `validateCandidate` keys on (`PROVIDER_UNAVAILABLE` from
+`sourceStatus`, `SETTLEMENT_CONFIDENCE_LOW` from the rule's confidence), which can
+turn a stale price into a false `VERIFIED_ARB`. `Selection` now carries a required
+`marketSourceId` FK to the specific `market_source_ids` row it was quoted from
+(`ON DELETE CASCADE`), and `loadPricedSelections` reads `provider` / `sourceStatus`
+/ settlement version+confidence from *that row*. When two providers quote the same
+`(bookmaker, outcome)`, the selection follows the higher-priority provider's row.
+
+**Backfill.** `planMarketReconcile` (`packages/normalization`, pure) groups persisted
+markets by `(eventCanonicalId, canonicalMarketId)` and, cross-provider only, picks
+the same priority winner as the event planner; `applyMarketMerge` /
+`applyMarketReconcilePlan` (`packages/db`) move a loser's `market_source_ids` and
+selections onto the winner in one transaction — dropping a colliding selection
+(same bookmaker+outcome) and re-pointing `Market`'s primary columns — then delete the
+loser. `(eventId, canonicalMarketId)` is a **plain index, not a unique constraint**,
+deliberately: the constraint would make a duplicate un-insertable and leave the CLI
+no way to repair it. Uniqueness is the write path's job; the DB tolerates legacy
+duplicates so the backfill can run. Operator entry point:
+`npm run db:reconcile-markets` (dry-run default; `--apply --yes` to write).
+
+Interaction worth knowing: folding is **canonicalization, not a prerequisite for
+detection**. `provider` is not used to exclude same-source legs in
+`candidates.ts`; detection unions selections by structure, so arb detection worked
+before Step 5 too. What Step 5 fixes is the *identity* — one market, one structure,
+one set of legs — and the *per-selection provenance* that validation depends on.
+
 ## History and reconstruction (Phase 15)
 
 Every detection run is remembered so any historical opportunity can be
@@ -236,20 +321,25 @@ DOWN/DEGRADED cycles never fabricate disappearances.
   (first/last/min/max/delta/pctChange) → the acceptance case.
 - `loadOddsHistory` — per-selection or per-event price series, ISO bounds.
 - `sourceLatencyStats` — poll-to-persist cycle latency from `scanner_health`.
+- `sourceReliabilityStats` — per-source reliability from the same heartbeats:
+  runs, healthy/degraded/down counts, success rate and latency percentiles
+  (avg/p50/p95/min/max) plus current registry status. Every registered source is
+  reported, so a fully-down provider stays visible with zero runs.
 - `falsePositiveAnalysis` — concluded episodes by latest status: STALE/REJECTED/
   INVALIDATED are false positives, VERIFIED_ARB verified, with by-status
   duration and the top rejection reasons.
 
 **API.** `apps/web` serves it read-only behind the admin/reader key:
 `GET /api/v1/history/opportunities{,/:episodeId}`, `/odds` (`selectionId` or
-canonical `eventId` required), `/latency`, `/analysis` — handlers, zod query
-schemas and OpenAPI paths/components live in `lib/api` beside the Phase 12 API.
+canonical `eventId` required), `/latency`, `/reliability`, `/analysis` — handlers,
+zod query schemas and OpenAPI paths/components live in `lib/api` beside the
+Phase 12 API.
 
 ```text
 detection -> persistOpportunity (episode upsert + steps)
    -> opportunity_episodes (first/last seen, counts, disappearedAt)
    -> odds_observations (complete price timeline)
-   -> HistoryRepo -> GET /api/v1/history/** (reconstruction, movement, latency, FP report)
+   -> HistoryRepo -> GET /api/v1/history/** (reconstruction, movement, latency, reliability, FP report)
 ```
 
 ## Data flow per scan cycle

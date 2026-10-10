@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_ALERT_CHECK_INTERVAL_MS,
+  DEFAULT_ALERT_MIN_SEVERITY,
+  DEFAULT_ALERT_RENOTIFY_MS,
   DEFAULT_SCANNER_POLL_INTERVAL_MS,
   DEFAULT_WORKER_STALENESS_MS,
   assertIntervalWithinStaleness,
+  resolveAlertConfig,
   resolveHealthConfig,
   resolveProviderConfigs,
   resolveScanIntervalMs,
@@ -202,7 +206,69 @@ describe("worker configuration", () => {
           WORKER_PROVIDER: "odds-api,pinnacle",
           ODDS_API_KEY: "k",
         })
-      ).toThrow(/Unknown WORKER_PROVIDER=pinnacle; expected one of: mock, odds-api, parlay-api/);
+      ).toThrow(
+        /Unknown WORKER_PROVIDER=pinnacle; expected one of: mock, odds-api, parlay-api, example/
+      );
+    });
+
+    it("resolves the credential-free reference provider from EXAMPLE_BASE_URL", () => {
+      expect(
+        resolveProviderConfigs({
+          NODE_ENV: "development",
+          WORKER_PROVIDER: "example",
+          EXAMPLE_BASE_URL: "http://127.0.0.1:4010",
+          EXAMPLE_REGIONS: "uk",
+          EXAMPLE_MARKETS: "h2h,totals",
+          EXAMPLE_SPORT: "soccer_epl",
+        })
+      ).toEqual([
+        {
+          kind: "example",
+          config: {
+            baseUrl: "http://127.0.0.1:4010",
+            regions: "uk",
+            markets: "h2h,totals",
+            defaultSportKey: "soccer_epl",
+          },
+        },
+      ]);
+    });
+
+    it("requires a base URL for the reference provider", () => {
+      expect(() =>
+        resolveProviderConfigs({ NODE_ENV: "development", WORKER_PROVIDER: "example" })
+      ).toThrow(/EXAMPLE_BASE_URL/);
+      expect(() =>
+        resolveProviderConfigs({
+          NODE_ENV: "development",
+          WORKER_PROVIDER: "example",
+          EXAMPLE_BASE_URL: "  ",
+        })
+      ).toThrow(/EXAMPLE_BASE_URL/);
+    });
+
+    it("refuses the reference provider in production", () => {
+      // Like mock, the reference adapter serves fixture data: with DATABASE_URL
+      // set that would be persisted and served as real opportunities.
+      expect(() =>
+        resolveProviderConfigs({
+          NODE_ENV: "production",
+          WORKER_PROVIDER: "example",
+          EXAMPLE_BASE_URL: "https://example.test",
+          DATABASE_URL: productionDatabaseUrl,
+        })
+      ).toThrow(/Refusing to run WORKER_PROVIDER=example in production/);
+    });
+
+    it("refuses to mix the reference provider with a real feed", () => {
+      expect(() =>
+        resolveProviderConfigs({
+          NODE_ENV: "development",
+          WORKER_PROVIDER: "odds-api,example",
+          ODDS_API_KEY: "k",
+          EXAMPLE_BASE_URL: "http://127.0.0.1:4010",
+        })
+      ).toThrow(/example cannot be combined/);
     });
 
     it("resolves parlay-api on its own key and base URL", () => {
@@ -546,3 +612,75 @@ describe("poll interval vs health staleness", () => {
     );
   });
 });
+
+describe("alert configuration", () => {
+  it("is off by default, with a warning floor and a 30-minute re-notify", () => {
+    expect(resolveAlertConfig({ NODE_ENV: "development" })).toEqual({
+      enabled: false,
+      renotifyMs: DEFAULT_ALERT_RENOTIFY_MS,
+      minSeverity: DEFAULT_ALERT_MIN_SEVERITY,
+      hysteresis: 1,
+      checkIntervalMs: DEFAULT_ALERT_CHECK_INTERVAL_MS,
+    });
+  });
+
+  it("is enabled by the presence of ALERT_WEBHOOK_URL", () => {
+    const config = resolveAlertConfig({
+      NODE_ENV: "development",
+      ALERT_WEBHOOK_URL: "https://hooks.example/alert",
+    });
+    expect(config.enabled).toBe(true);
+    expect(config.webhookUrl).toBe("https://hooks.example/alert");
+  });
+
+  it("accepts a webhook URL that carries its secret in the path or query", () => {
+    const config = resolveAlertConfig({
+      NODE_ENV: "development",
+      ALERT_WEBHOOK_URL: "https://hooks.example/services/T00/B00/XXXX?token=abc",
+    });
+    expect(config.webhookUrl).toContain("token=abc");
+  });
+
+  it("refuses a plain http webhook in production", () => {
+    expect(() =>
+      resolveAlertConfig({ NODE_ENV: "production", ALERT_WEBHOOK_URL: "http://hooks.example/x" })
+    ).toThrow(/ALERT_WEBHOOK_URL/);
+  });
+
+  it("refuses embedded credentials in the webhook URL", () => {
+    expect(() =>
+      resolveAlertConfig({
+        NODE_ENV: "development",
+        ALERT_WEBHOOK_URL: "https://user:pass@hooks.example/x",
+      })
+    ).toThrow(/ALERT_WEBHOOK_URL/);
+  });
+
+  it("reads the policy knobs and allows a zero re-notify", () => {
+    const config = resolveAlertConfig({
+      NODE_ENV: "development",
+      ALERT_WEBHOOK_URL: "https://hooks.example/alert",
+      ALERT_RENOTIFY_MS: "0",
+      ALERT_MIN_SEVERITY: "critical",
+      ALERT_HYSTERESIS: "3",
+      ALERT_CHECK_INTERVAL_MS: "60000",
+    });
+    expect(config.renotifyMs).toBe(0);
+    expect(config.minSeverity).toBe("critical");
+    expect(config.hysteresis).toBe(3);
+    expect(config.checkIntervalMs).toBe(60_000);
+  });
+
+  it("rejects an unknown severity", () => {
+    expect(() =>
+      resolveAlertConfig({ NODE_ENV: "development", ALERT_MIN_SEVERITY: "loud" })
+    ).toThrow(/ALERT_MIN_SEVERITY/);
+  });
+
+  it("rejects a non-positive hysteresis", () => {
+    expect(() =>
+      resolveAlertConfig({ NODE_ENV: "development", ALERT_HYSTERESIS: "0" })
+    ).toThrow(/ALERT_HYSTERESIS/);
+  });
+});
+

@@ -1,7 +1,9 @@
 import {
+  type ExampleProviderConfig,
   type OddsApiProviderConfig,
   type ParlayApiProviderConfig,
 } from "@22void/provider-contracts";
+import type { AlertSeverity } from "@22void/alerting";
 import { URL } from "node:url";
 
 export type WorkerEnvironment = Readonly<Record<string, string | undefined>>;
@@ -9,10 +11,11 @@ export type WorkerEnvironment = Readonly<Record<string, string | undefined>>;
 export type ResolvedProviderConfig =
   | { readonly kind: "mock" }
   | { readonly kind: "odds-api"; readonly config: OddsApiProviderConfig }
-  | { readonly kind: "parlay-api"; readonly config: ParlayApiProviderConfig };
+  | { readonly kind: "parlay-api"; readonly config: ParlayApiProviderConfig }
+  | { readonly kind: "example"; readonly config: ExampleProviderConfig };
 
 /** Provider names `WORKER_PROVIDER` accepts, in the order they are documented. */
-export const PROVIDER_NAMES = ["mock", "odds-api", "parlay-api"] as const;
+export const PROVIDER_NAMES = ["mock", "odds-api", "parlay-api", "example"] as const;
 
 export type ResolvedStoreConfig =
   { readonly kind: "postgres"; readonly databaseUrl: string } | { readonly kind: "memory" };
@@ -33,10 +36,32 @@ export interface ResolvedHealthConfig {
   readonly staleAfterMs: number;
 }
 
+/**
+ * Alerting configuration (Phase 19).
+ *
+ * `enabled` is derived from the presence of `ALERT_WEBHOOK_URL` rather than a
+ * separate boolean, so there is exactly one way to turn alerting on and no state
+ * where an "enabled" flag points at a URL that is not there. `webhookUrl` is
+ * absent when disabled; callers pass the policy fields straight to
+ * `@22void/alerting`.
+ */
+export interface ResolvedAlertConfig {
+  readonly enabled: boolean;
+  readonly webhookUrl?: string;
+  readonly renotifyMs: number;
+  readonly minSeverity: AlertSeverity;
+  readonly hysteresis: number;
+  readonly checkIntervalMs: number;
+}
+
 export const DEFAULT_WORKER_STARTUP_GRACE_MS = 30_000;
 export const DEFAULT_WORKER_STALENESS_MS = 300_000;
 export const DEFAULT_WORKER_STALE_THRESHOLD_MS = DEFAULT_WORKER_STALENESS_MS;
 export const DEFAULT_SCANNER_POLL_INTERVAL_MS = 15_000;
+export const DEFAULT_ALERT_RENOTIFY_MS = 30 * 60 * 1000;
+export const DEFAULT_ALERT_MIN_SEVERITY: AlertSeverity = "warning";
+export const DEFAULT_ALERT_HYSTERESIS = 1;
+export const DEFAULT_ALERT_CHECK_INTERVAL_MS = 30_000;
 
 export function isProductionEnvironment(env: WorkerEnvironment = process.env): boolean {
   return env.NODE_ENV === "production";
@@ -210,6 +235,26 @@ export function resolveProviderConfigs(
     );
   }
 
+  if (production && names.includes("example")) {
+    // The reference provider is the credential-free template from
+    // docs/ADDING_A_PROVIDER.md; it serves fixture data, and persistence would
+    // turn that into "real" opportunities. There is no opt-in because its only
+    // purpose is to demonstrate the add-a-provider surface.
+    throw new Error(
+      "Refusing to run WORKER_PROVIDER=example in production: it is the credential-free " +
+        "reference adapter (docs/ADDING_A_PROVIDER.md) and serves fixture data, not a real feed. " +
+        "Fork it into a real adapter (and drop this guard) to add a provider."
+    );
+  }
+
+  if (names.length > 1 && names.includes("example")) {
+    throw new Error(
+      `Invalid WORKER_PROVIDER=${raw}: example cannot be combined with another provider. ` +
+        "Its reference fixture exists to exercise the add-a-provider surface, not to sit " +
+        "beside a real feed in a single detection pass."
+    );
+  }
+
   return names.map((name) => resolveOneProvider(name, env, production));
 }
 
@@ -220,6 +265,7 @@ function resolveOneProvider(
 ): ResolvedProviderConfig {
   if (name === "mock") return { kind: "mock" };
   if (name === "odds-api") return resolveOddsApiProvider(env, production);
+  if (name === "example") return resolveExampleProvider(env, production);
   return resolveParlayApiProvider(env, production);
 }
 
@@ -276,6 +322,35 @@ function resolveParlayApiProvider(
   return { kind: "parlay-api", config };
 }
 
+/**
+ * The reference provider is credential-free by design (no `EXAMPLE_API_KEY`):
+ * it exists to prove a provider can be added without touching the core engine,
+ * not to authenticate against a live feed. `EXAMPLE_BASE_URL` is still required
+ * and still validated, so the template exercises the same URL rules a real
+ * provider would (https-only in production, no embedded credentials, no
+ * credential query parameter) even though production itself is refused above.
+ */
+function resolveExampleProvider(
+  env: WorkerEnvironment,
+  production: boolean
+): Extract<ResolvedProviderConfig, { kind: "example" }> {
+  const baseUrl = resolveBaseUrl("EXAMPLE_BASE_URL", env.EXAMPLE_BASE_URL, production);
+  if (baseUrl === undefined) {
+    throw new Error("WORKER_PROVIDER=example requires a non-empty EXAMPLE_BASE_URL");
+  }
+  const regions = optionalProviderValue(env, "EXAMPLE_REGIONS", production);
+  const markets = optionalProviderValue(env, "EXAMPLE_MARKETS", production);
+  const defaultSportKey = optionalProviderValue(env, "EXAMPLE_SPORT", production);
+  const config: ExampleProviderConfig = {
+    baseUrl,
+    ...(regions !== undefined ? { regions } : {}),
+    ...(markets !== undefined ? { markets } : {}),
+    ...(defaultSportKey !== undefined ? { defaultSportKey } : {}),
+  };
+
+  return { kind: "example", config };
+}
+
 export function resolveStoreConfig(env: WorkerEnvironment = process.env): ResolvedStoreConfig {
   const production = isProductionEnvironment(env);
   const databaseUrl = env.DATABASE_URL?.trim();
@@ -311,6 +386,94 @@ function readDuration(
     return value;
   }
   return fallback;
+}
+
+/**
+ * A webhook destination for alert events (Phase 19).
+ *
+ * Unlike a provider base URL, a webhook URL legitimately carries a secret in its
+ * path or query (a Slack- or Teams-style incoming hook); what is refused is the
+ * credential as *userinfo* (`https://user:pass@host`) and plain `http://` in
+ * production, because an alert body names which feeds are down. The URL itself is
+ * never logged.
+ */
+function resolveAlertWebhookUrl(raw: string | undefined, production: boolean): string | undefined {
+  if (raw === undefined) return undefined;
+  const value = raw.trim();
+  if (value === "") {
+    if (production) invalidConfig("ALERT_WEBHOOK_URL", "a non-empty https URL");
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return invalidConfig("ALERT_WEBHOOK_URL", "a valid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    invalidConfig("ALERT_WEBHOOK_URL", "an http or https URL");
+  }
+  if (production && parsed.protocol !== "https:") {
+    invalidConfig(
+      "ALERT_WEBHOOK_URL",
+      "an https:// URL in production (an alert names which feeds are down)"
+    );
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    invalidConfig("ALERT_WEBHOOK_URL", "a URL without embedded credentials (no user:password@)");
+  }
+
+  return value;
+}
+
+const ALERT_SEVERITIES = ["info", "warning", "critical"] as const;
+
+function resolveAlertSeverity(
+  raw: string | undefined,
+  production: boolean
+): AlertSeverity {
+  if (raw === undefined) return "warning";
+  const value = raw.trim().toLowerCase();
+  if (value === "") {
+    if (production) invalidConfig("ALERT_MIN_SEVERITY", "one of info, warning, critical");
+    return "warning";
+  }
+  if (!(ALERT_SEVERITIES as readonly string[]).includes(value)) {
+    invalidConfig("ALERT_MIN_SEVERITY", "one of info, warning, critical");
+  }
+  return value as AlertSeverity;
+}
+
+function readPositiveInt(
+  env: WorkerEnvironment,
+  name: string,
+  fallback: number
+): number {
+  const raw = env[name];
+  if (raw === undefined) return fallback;
+  if (raw.trim() === "") invalidConfig(name, "a positive integer");
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) invalidConfig(name, "a positive integer");
+  return value;
+}
+
+export function resolveAlertConfig(env: WorkerEnvironment = process.env): ResolvedAlertConfig {
+  const production = isProductionEnvironment(env);
+  const webhookUrl = resolveAlertWebhookUrl(env.ALERT_WEBHOOK_URL, production);
+  return {
+    enabled: webhookUrl !== undefined,
+    ...(webhookUrl === undefined ? {} : { webhookUrl }),
+    renotifyMs: readDuration(env, ["ALERT_RENOTIFY_MS"], DEFAULT_ALERT_RENOTIFY_MS, true),
+    minSeverity: resolveAlertSeverity(env.ALERT_MIN_SEVERITY, production),
+    hysteresis: readPositiveInt(env, "ALERT_HYSTERESIS", DEFAULT_ALERT_HYSTERESIS),
+    checkIntervalMs: readDuration(
+      env,
+      ["ALERT_CHECK_INTERVAL_MS"],
+      DEFAULT_ALERT_CHECK_INTERVAL_MS,
+      false
+    ),
+  };
 }
 
 export function resolveHealthConfig(env: WorkerEnvironment = process.env): ResolvedHealthConfig {

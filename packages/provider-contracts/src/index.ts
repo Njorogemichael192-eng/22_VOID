@@ -15,7 +15,9 @@
  *   domain schema are collected as `rejected`, never guessed.
  *
  * Providers: MockProvider (deterministic fixture harness), OddsApiProvider
- * (initial), ParlayApiProvider (adapter skeleton for the multi-provider phase).
+ * (initial), ParlayApiProvider (adapter skeleton for the multi-provider phase)
+ * and ExampleProvider (the credential-free reference adapter for
+ * docs/ADDING_A_PROVIDER.md — the template a new provider is copied from).
  */
 
 export * from "./provider-id.js";
@@ -28,4 +30,5 @@ export * from "./providers/translate.js";
 export * from "./mock-provider.js";
 export * from "./adapters/odds-api.js";
 export * from "./adapters/parlay-api.js";
+export * from "./adapters/example.js";
 export * from "./providers/http.js";

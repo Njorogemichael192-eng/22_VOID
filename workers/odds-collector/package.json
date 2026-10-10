@@ -18,6 +18,7 @@
     "start": "tsx src/main.ts"
   },
   "dependencies": {
+    "@22void/alerting": "0.0.0",
     "@22void/arbitrage": "0.0.0",
     "@22void/db": "0.0.0",
     "@22void/domain": "0.0.0",

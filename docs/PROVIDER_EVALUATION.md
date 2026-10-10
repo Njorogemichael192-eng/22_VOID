@@ -139,3 +139,27 @@ Two things remain open rather than proven:
 credential-leak runbook, and the replacement was accepted by `validate-env.sh`
 (the ParlayAPI check enforces presence and shape only, never a length the
 issuer does not publish).
+
+## Reference provider (Provider C template) — 2026-10-10
+
+Provider B met the Phase 19 acceptance structurally (a second feed needed no
+core-engine change) but was implemented before the *surface* of adding a provider
+was written down. The Provider C step closes that gap:
+
+- **The guide** is `docs/ADDING_A_PROVIDER.md` — the exact eight hook points a
+  new feed touches (provider key, market-key registry, adapter, index export,
+  worker config resolver, worker factory, env plumbing, tests) and the guards to
+  preserve (unknown names, empty entries, repeats, synthetic-vs-real, production
+  refusal).
+- **The worked example** is the credential-free `example` provider
+  (`packages/provider-contracts/src/adapters/example.ts`). Unlike `MockProvider`,
+  which hands back a pre-built envelope, it runs the *real* adapter pipeline —
+  `fetchJson` → zod wire parse → `EXAMPLE_MARKET_KEYS` → `translateProviderOdds`
+  → envelope — so the template is exercised end-to-end rather than described. It
+  is refused in production (config and `validate-env.sh`) because it serves
+  fixture data.
+
+No provider credits are involved: the reference adapter is polled against a local
+fixture in tests. The acceptance is proven by the diff — no file under
+`packages/arbitrage`, `packages/db`, `packages/normalization` or `apps/` changed
+to add it.

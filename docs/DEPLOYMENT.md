@@ -95,8 +95,9 @@ docker compose --env-file infra/.env.prod -f infra/compose.prod.yml run --rm mig
 | `DATABASE_URL`                                                 | web, worker | yes                              | `postgresql://u:p@db:5432/db`                                                                                     |
 | `DASHBOARD_SOURCE`                                             | web         | yes (`db`)                       | the entrypoint validator fails startup unless it is exactly `db`; `demo` serves the fixture repo (e2e/smoke only) |
 | `API_KEY`, `ADMIN_API_KEY`                                     | web         | yes                              | sent as the `x-api-key` header, **not** `Authorization: Bearer`; missing → API fails closed 401                   |
-| `WORKER_PROVIDER`                                              | worker      | `odds-api`                       | required in production; a **comma list** — one cycle polls every entry (`odds-api,parlay-api`); `mock` is **refused** (see below) and cannot be combined with a real provider |
+| `WORKER_PROVIDER`                                              | worker      | `odds-api`                       | required in production; a **comma list** — one cycle polls every entry (`odds-api,parlay-api`); `mock` and the reference `example` provider are **refused** (see below) and cannot be combined with a real provider |
 | `ALLOW_MOCK_PROVIDER_IN_PRODUCTION`                            | worker      | unset                            | demo escape hatch for the refusal; leave empty on a real stack                                                    |
+| `EXAMPLE_BASE_URL`, `EXAMPLE_REGIONS`, `EXAMPLE_MARKETS`, `EXAMPLE_SPORT` | worker | dev only                | the credential-free reference adapter from `docs/ADDING_A_PROVIDER.md`; **development only** — refused in production like `mock` |
 | `ODDS_API_KEY`, `ODDS_API_BASE_URL`                            | worker      | for live provider                | required when `WORKER_PROVIDER` contains `odds-api`; the base URL **must be `https://`**                          |
 | `ODDS_API_AUTH_IN_QUERY`                                       | worker      | unset                            | escape hatch that sends the key as `?apiKey=`; leave empty (see below)                                            |
 | `ODDS_API_REGIONS`, `ODDS_API_MARKETS`, `ODDS_API_SPORT`       | worker      | see `env.prod.example`           | narrow what each poll asks for; the credit cost of a poll is **regions x markets**                                |
@@ -194,7 +195,7 @@ Two escape routes, both explicit:
   `.env.prod` does something predictable, and it is deliberately spelled out at
   length so it is greppable in an env file and in a shell history.
 
-`WORKER_PROVIDER` must also be one of the three known values everywhere, not just
+`WORKER_PROVIDER` must also be one of the recognized values everywhere, not just
 in production: an unrecognised value used to resolve to `mock` silently, so
 `WORKER_PROVIDER=odds_api` in a developer's env file quietly served invented odds
 instead of erroring. The list form is validated entry by entry — an empty segment
@@ -373,6 +374,19 @@ cached 200 — cannot keep reporting a wedged worker as healthy.
 - **Freshness**: `GET /api/v1/scanner` exposes `overall.lastRunAt`/`overall.status`;
   the app flags runs older than 5 minutes as `stale`. Alert when `overall.stale`
   is non-null (worker down, provider failing, or scheduler stalled).
+- **Built-in alerting** (`ALERT_WEBHOOK_URL`, Phase 19): the worker evaluates its
+  own cycle health (including `stale`) and each source's availability every
+  `ALERT_CHECK_INTERVAL_MS`, and **POSTs a JSON alert event to the webhook on a
+  transition** into `DOWN`/`DEGRADED`, plus a `RESOLVED` event when it recovers —
+  so a persistent condition does not re-notify every cycle (`ALERT_RENOTIFY_MS`
+  controls the repeat; `0` fires once). `ALERT_MIN_SEVERITY` (`info|warning|
+  critical`, default `warning`) sets the floor: anything below it is tracked but
+  not sent, and an escalation from below the floor to a `DOWN` still notifies.
+  `ALERT_HYSTERESIS` (default 1) damps flapping by requiring that many consecutive
+  unhealthy checks. The webhook must be `https://` in production and is never
+  logged. This is the consumer the health signals previously lacked; external
+  polling of `/healthz` and `/api/v1/scanner` remains worthwhile as defence in
+  depth (a webhook cannot report that the worker process is gone entirely).
 - **Backup liveness**: `docker compose --env-file infra/.env.prod -f
 infra/compose.prod.yml exec backup cat /backups/status` shows the
   last dump (`OK <timestamp>` = green, `FAILED ...` = alert). Send that file's
@@ -508,6 +522,45 @@ a defect: `(Corners)`-style markets that the feeds identify differently are left
 distinct, and a folded event whose legs carry `sourceUpdatedAt` stamps more than
 60 s apart will be reported `CROSS_SOURCE_TIMESTAMP_SPREAD` (a freshness verdict,
 not a matching bug).
+
+#### Cross-provider market reconciliation
+
+Market folding happens **on the write path** — `persistCanonicalRun` folds two
+providers' listings of the same market into one `markets` row as the scan cycle
+runs — so you do not need this command for normal operation. `npm run
+db:reconcile-markets` is the one-shot **backfill** for rows written before Step 5
+(or by a provider that was added later): each listing's identity is preserved in
+`market_source_ids`, and this command merges the duplicates a pre-Step-5 schema
+left behind. It is the same shape as the event reconciler.
+
+```sh
+# DRY RUN is the default — prints the fold plan and writes nothing.
+DATABASE_URL='postgresql://...' npm run db:reconcile-markets
+
+# enforce (both flags required; --apply alone refuses)
+DATABASE_URL='postgresql://...' npm run db:reconcile-markets -- --apply --yes
+
+npm run db:reconcile-markets -- --json
+npm run db:reconcile-markets -- --max-merges 5 --apply --yes
+```
+
+Markets fold **within a canonical event**, grouped by the provider-independent
+`family|period|marketType|participant|line` key, winner chosen by provider priority
+(`odds-api` > `parlay-api`) then earliest `createdAt`. Each fold is one transaction
+that moves the loser's `market_source_ids` and selections onto the winner (a
+selection colliding on bookmaker+outcome is dropped, the winner's is kept) and
+re-points the primary listing before deleting the loser, so a partial run is
+resumable and a second dry run reports `0 folds`.
+
+Two schema points to know before you apply it. `markets (eventId,
+canonicalMarketId)` is a **plain index, not a unique constraint** — the DB
+deliberately tolerates a legacy duplicate so this command can repair it; the write
+path is what keeps the steady state unique. And each `Selection` names the exact
+`market_source_ids` row it was quoted from (`marketSourceId`), which is how a folded
+market keeps per-provider provenance for `validateCandidate`.
+
+**Take a dump before applying** (see § above). Recovery is restore-from-dump via
+`restore.sh`; there is deliberately no `--undo`.
 
 ---
 

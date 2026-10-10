@@ -24,6 +24,7 @@ import {
   type ProviderView,
   type ScannerRunView,
   type SourceLatencyStat,
+  type SourceReliabilityStat,
 } from "@22void/db";
 import { listAdminSources, listAuditLogs } from "./handlers/admin.js";
 import { listEvents, getEvent } from "./handlers/events.js";
@@ -37,6 +38,7 @@ import {
   listEpisodes,
   listOddsHistory,
   sourceLatency,
+  sourceReliability,
   type HistoryHandlerDeps,
 } from "./handlers/history.js";
 import type { HandlerDeps } from "./handlers/common.js";
@@ -344,6 +346,29 @@ function latencyStat(overrides: Partial<SourceLatencyStat> = {}): SourceLatencyS
   };
 }
 
+function reliabilityStat(overrides: Partial<SourceReliabilityStat> = {}): SourceReliabilityStat {
+  return {
+    sourceKey: "pinnacle",
+    displayName: "Pinnacle",
+    currentStatus: "HEALTHY",
+    lastSeenAt: "2026-10-01T18:29:00.000Z",
+    runs: 300,
+    healthy: 295,
+    degraded: 4,
+    down: 1,
+    successRate: 0.9833,
+    avgMs: 145,
+    p50Ms: 120,
+    p95Ms: 420,
+    minMs: 60,
+    maxMs: 480,
+    lastRunAt: "2026-10-01T18:29:00.000Z",
+    lastStatus: "HEALTHY",
+    lastLatencyMs: 120,
+    ...overrides,
+  };
+}
+
 function falsePositiveReport(overrides: Partial<FalsePositiveReport> = {}): FalsePositiveReport {
   return {
     episodes: 10,
@@ -362,6 +387,7 @@ interface FakeHistoryCalls {
   episodeFilter?: unknown;
   oddsFilter?: unknown;
   latencyFilter?: unknown;
+  reliabilityFilter?: unknown;
   analysisFilter?: unknown;
   requestedEpisodeId?: string | null;
 }
@@ -386,6 +412,10 @@ function createFakeHistoryRepo(
     async sourceLatency(filter) {
       calls.latencyFilter = filter;
       return [latencyStat()];
+    },
+    async sourceReliability(filter) {
+      calls.reliabilityFilter = filter;
+      return [reliabilityStat()];
     },
     async falsePositiveAnalysis(filter) {
       calls.analysisFilter = filter;
@@ -856,6 +886,23 @@ describe("history endpoints", () => {
     expect(calls.latencyFilter).toMatchObject({ sourceKey: "pinnacle" });
   });
 
+  it("returns source reliability statistics", async () => {
+    const calls: FakeHistoryCalls = {};
+    const response = await sourceReliability(
+      get("http://test.local/api/v1/history/reliability?sourceKey=pinnacle", READER_KEY),
+      historyDeps(calls)
+    );
+    expect(response.status).toBe(200);
+    const payload = (await body(response)) as { data: SourceReliabilityStat[] };
+    expect(payload.data[0]).toMatchObject({
+      sourceKey: "pinnacle",
+      runs: 300,
+      successRate: 0.9833,
+      p95Ms: 420,
+    });
+    expect(calls.reliabilityFilter).toMatchObject({ sourceKey: "pinnacle" });
+  });
+
   it("returns the false-positive report", async () => {
     const calls: FakeHistoryCalls = {};
     const response = await falsePositiveAnalysis(
@@ -927,6 +974,7 @@ describe("openapi contract", () => {
         "/history/opportunities/{id}",
         "/history/odds",
         "/history/latency",
+        "/history/reliability",
         "/history/analysis",
       ])
     );
