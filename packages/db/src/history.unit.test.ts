@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeOpportunityKey,
   legKeyFromSelectionIds,
+  percentileNearestRank,
 } from "./history.js";
 
 describe("opportunity episode identity (Phase 15)", () => {
@@ -27,5 +28,19 @@ describe("opportunity episode identity (Phase 15)", () => {
   it("rejects zero leg sets and de-duplicates the leg key", () => {
     expect(() => computeOpportunityKey({ eventCanonicalId: "evt-1", structureType: "X", selectionIds: [] })).toThrow();
     expect(legKeyFromSelectionIds(["b", "a", "b"])).toBe("a,b");
+  });
+});
+
+describe("source reliability percentiles", () => {
+  it("uses nearest-rank on the ascending series", () => {
+    const sorted = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    expect(percentileNearestRank(sorted, 0.5)).toBe(50);
+    expect(percentileNearestRank(sorted, 0.95)).toBe(100);
+    expect(percentileNearestRank(sorted, 1)).toBe(100);
+  });
+
+  it("clamps small samples and flags the empty set", () => {
+    expect(percentileNearestRank([42], 0.95)).toBe(42);
+    expect(Number.isNaN(percentileNearestRank([], 0.5))).toBe(true);
   });
 });

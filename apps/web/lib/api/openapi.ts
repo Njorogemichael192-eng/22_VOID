@@ -538,6 +538,43 @@ export const openApiDocument: OpenApiDocument = {
         },
       },
     },
+    "/history/reliability": {
+      get: {
+        tags: ["history"],
+        summary: "Provider reliability: success rate and latency percentiles per source",
+        parameters: [
+          { $ref: "#/components/parameters/limit" },
+          { name: "sourceKey", in: "query", schema: { type: "string" } },
+          {
+            name: "after",
+            in: "query",
+            description: "Only cycles finished after this time (ISO-8601)",
+            schema: { type: "string", format: "date-time" },
+          },
+        ],
+        security: [{ apiKey: [] }],
+        responses: {
+          "200": {
+            description: "Reliability statistics per source",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["data"],
+                  properties: {
+                    data: {
+                      type: "array",
+                      items: { $ref: "#/components/schemas/SourceReliability" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+        },
+      },
+    },
     "/history/analysis": {
       get: {
         tags: ["history"],
@@ -961,6 +998,29 @@ export const openApiDocument: OpenApiDocument = {
           minMs: { type: "number" },
           maxMs: { type: "number" },
           lastRunAt: { type: "string", format: "date-time", nullable: true },
+          lastLatencyMs: { type: "number", nullable: true },
+        },
+      },
+      SourceReliability: {
+        type: "object",
+        required: ["sourceKey", "displayName", "currentStatus", "runs", "healthy", "degraded", "down"],
+        properties: {
+          sourceKey: { type: "string" },
+          displayName: { type: "string" },
+          currentStatus: { type: "string" },
+          lastSeenAt: { type: "string", format: "date-time", nullable: true },
+          runs: { type: "integer" },
+          healthy: { type: "integer" },
+          degraded: { type: "integer" },
+          down: { type: "integer" },
+          successRate: { type: "number", nullable: true },
+          avgMs: { type: "number", nullable: true },
+          p50Ms: { type: "number", nullable: true },
+          p95Ms: { type: "number", nullable: true },
+          minMs: { type: "number", nullable: true },
+          maxMs: { type: "number", nullable: true },
+          lastRunAt: { type: "string", format: "date-time", nullable: true },
+          lastStatus: { type: "string", nullable: true },
           lastLatencyMs: { type: "number", nullable: true },
         },
       },

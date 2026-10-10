@@ -21,6 +21,7 @@ import {
   type OddsHistoryFilterView,
   type OpportunityFilter,
   type SourceLatencyFilter,
+  type SourceReliabilityFilter,
 } from "@22void/db";
 import {
   EVENT_STATUS_VALUES,
@@ -118,6 +119,9 @@ export const sourceLatencyQuerySchema = z.object({
   limit: limitSchema.optional(),
 });
 export type SourceLatencyQuery = z.infer<typeof sourceLatencyQuerySchema>;
+
+export const sourceReliabilityQuerySchema = sourceLatencyQuerySchema;
+export type SourceReliabilityQuery = z.infer<typeof sourceReliabilityQuerySchema>;
 
 export const falsePositiveQuerySchema = z.object({
   after: isoDateTimeSchema.optional(),
@@ -241,6 +245,14 @@ export function toOddsHistoryFilter(query: OddsHistoryQuery): OddsHistoryFilterV
 }
 
 export function toSourceLatencyFilter(query: SourceLatencyQuery): SourceLatencyFilter {
+  return {
+    sourceKey: query.sourceKey,
+    after: query.after,
+    limit: query.limit ?? DEFAULT_LIST_LIMIT,
+  };
+}
+
+export function toSourceReliabilityFilter(query: SourceReliabilityQuery): SourceReliabilityFilter {
   return {
     sourceKey: query.sourceKey,
     after: query.after,

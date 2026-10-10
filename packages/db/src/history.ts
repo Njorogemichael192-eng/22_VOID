@@ -13,6 +13,9 @@
  *   snapshots and the leg odds series back into a single record.
  * - **Source latency**: `sourceLatencyStats` aggregates poll-to-persist cycle
  *   duration from `scanner_health`.
+ * - **Source reliability**: `sourceReliabilityStats` reports per-source success
+ *   rate (healthy vs degraded/down cycles) and latency percentiles from the same
+ *   heartbeats, including sources with no cycles in the window.
  * - **False-positive analysis**: `falsePositiveAnalysis` classifies episodes by
  *   their latest detection status and reports the non-verified share plus the
  *   dominant rejection reasons.
@@ -579,6 +582,146 @@ export async function sourceLatencyStats(
     });
   }
   stats.sort((a, b) => (b.lastRunAt ?? "").localeCompare(a.lastRunAt ?? ""));
+  return options.limit === undefined ? stats : stats.slice(0, options.limit);
+}
+
+// ---------------------------------------------------------------------------
+// Source reliability (scanner heartbeats + current source status)
+// ---------------------------------------------------------------------------
+
+export interface SourceReliabilityStat {
+  sourceKey: string;
+  displayName: string;
+  /** Current registered status from `odds_sources.status`. */
+  currentStatus: string;
+  lastSeenAt: string | null;
+  /** Finished cycles observed in the window. */
+  runs: number;
+  healthy: number;
+  degraded: number;
+  down: number;
+  /** `healthy / runs`, or null when the window holds no finished cycles. */
+  successRate: number | null;
+  avgMs: number | null;
+  p50Ms: number | null;
+  p95Ms: number | null;
+  minMs: number | null;
+  maxMs: number | null;
+  lastRunAt: string | null;
+  lastStatus: string | null;
+  lastLatencyMs: number | null;
+}
+
+export interface SourceReliabilityOptions {
+  sourceKey?: string;
+  /** ISO-8601 lower bound on finished scan cycles. */
+  after?: string;
+  limit?: number;
+}
+
+/**
+ * Nearest-rank percentile over an ASC-sorted array. Returns the value at rank
+ * `ceil(fraction * n)` clamped into `[1, n]`; the empty array yields `NaN` so
+ * callers map it to `null`.
+ */
+export function percentileNearestRank(sortedAsc: number[], fraction: number): number {
+  if (sortedAsc.length === 0) return Number.NaN;
+  const rank = Math.ceil(fraction * sortedAsc.length);
+  const index = Math.min(Math.max(rank, 1), sortedAsc.length) - 1;
+  return sortedAsc[index] as number;
+}
+
+/**
+ * Per-source **reliability** metrics from `scanner_health` heartbeats: how many
+ * cycles succeeded versus degraded/failed (`successRate`) and the latency
+ * distribution (avg / p50 / p95 / min / max). Every registered `odds_sources`
+ * row is reported even with zero cycles in the window, so a provider that is
+ * entirely down stays visible instead of vanishing from the report. Current
+ * status and last-seen come from the source registry.
+ */
+export async function sourceReliabilityStats(
+  db: DbClient,
+  options: SourceReliabilityOptions = {},
+): Promise<SourceReliabilityStat[]> {
+  const sources = await db.oddsSource.findMany({
+    where: options.sourceKey !== undefined ? { key: options.sourceKey } : {},
+    orderBy: { key: "asc" },
+  });
+  if (sources.length === 0) return [];
+
+  const rows = await db.scannerHealth.findMany({
+    where: {
+      oddsSourceId: { in: sources.map((source) => source.id) },
+      // `gte` already excludes NULL `finishedAt`; the window-less query keeps
+      // only completed cycles.
+      finishedAt: options.after !== undefined ? { gte: new Date(options.after) } : { not: null },
+    },
+    orderBy: { startedAt: "asc" },
+  });
+
+  interface Bucket {
+    latencies: number[];
+    healthy: number;
+    degraded: number;
+    down: number;
+    lastStartedAt: number;
+    lastStatus: string | null;
+    lastLatencyMs: number | null;
+  }
+  const bySource = new Map<string, Bucket>();
+  for (const row of rows) {
+    if (row.finishedAt === null || row.oddsSourceId === null) continue;
+    const bucket: Bucket =
+      bySource.get(row.oddsSourceId) ??
+      ({
+        latencies: [],
+        healthy: 0,
+        degraded: 0,
+        down: 0,
+        lastStartedAt: 0,
+        lastStatus: null,
+        lastLatencyMs: null,
+      } satisfies Bucket);
+    const latency = row.finishedAt.getTime() - row.startedAt.getTime();
+    bucket.latencies.push(latency);
+    if (row.status === "HEALTHY") bucket.healthy += 1;
+    else if (row.status === "DEGRADED") bucket.degraded += 1;
+    else if (row.status === "DOWN") bucket.down += 1;
+    if (row.startedAt.getTime() >= bucket.lastStartedAt) {
+      bucket.lastStartedAt = row.startedAt.getTime();
+      bucket.lastStatus = row.status;
+      bucket.lastLatencyMs = latency;
+    }
+    bySource.set(row.oddsSourceId, bucket);
+  }
+
+  const stats: SourceReliabilityStat[] = sources.map((source) => {
+    const bucket = bySource.get(source.id);
+    const latencies = bucket ? [...bucket.latencies].sort((a, b) => a - b) : [];
+    const runs = latencies.length;
+    const total = latencies.reduce((sum, value) => sum + value, 0);
+    return {
+      sourceKey: source.key,
+      displayName: source.displayName,
+      currentStatus: source.status,
+      lastSeenAt: source.lastSeenAt?.toISOString() ?? null,
+      runs,
+      healthy: bucket?.healthy ?? 0,
+      degraded: bucket?.degraded ?? 0,
+      down: bucket?.down ?? 0,
+      successRate: runs > 0 ? (bucket?.healthy ?? 0) / runs : null,
+      avgMs: runs > 0 ? total / runs : null,
+      p50Ms: runs > 0 ? percentileNearestRank(latencies, 0.5) : null,
+      p95Ms: runs > 0 ? percentileNearestRank(latencies, 0.95) : null,
+      minMs: runs > 0 ? (latencies[0] as number) : null,
+      maxMs: runs > 0 ? (latencies[runs - 1] as number) : null,
+      lastRunAt:
+        bucket && bucket.lastStartedAt > 0 ? new Date(bucket.lastStartedAt).toISOString() : null,
+      lastStatus: bucket?.lastStatus ?? null,
+      lastLatencyMs: bucket?.lastLatencyMs ?? null,
+    };
+  });
+
   return options.limit === undefined ? stats : stats.slice(0, options.limit);
 }
 

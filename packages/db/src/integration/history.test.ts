@@ -10,6 +10,7 @@ import {
   persistOpportunity,
   recordHeartbeat,
   sourceLatencyStats,
+  sourceReliabilityStats,
   sweepOpportunityEpisodes,
   type PersistCanonicalRunInput,
 } from "../index.js";
@@ -235,6 +236,35 @@ describe.skipIf(!dbAvailable)("Phase 15 - history integration", () => {
     expect(stats).toHaveLength(1);
     expect(stats[0]).toMatchObject({ sourceKey: provider, runs: 2, avgMs: 4000, minMs: 3000, maxMs: 5000 });
     expect(stats[0]?.lastRunAt).toBe("2026-09-23T10:01:00.000Z");
+  });
+
+  it("reports per-source reliability with success rate and percentiles", async () => {
+    const source = await db.oddsSource.findUniqueOrThrow({ where: { key: provider } });
+    await recordHeartbeat(db, {
+      runId: `run-${suffix}-r3`,
+      oddsSourceId: source.id,
+      status: "DOWN",
+      startedAt: new Date("2026-09-23T10:02:00.000Z"),
+      finishedAt: new Date("2026-09-23T10:02:01.000Z"),
+    });
+
+    const stats = await sourceReliabilityStats(db, { sourceKey: provider });
+    expect(stats).toHaveLength(1);
+    expect(stats[0]).toMatchObject({
+      sourceKey: provider,
+      runs: 3,
+      healthy: 2,
+      down: 1,
+      degraded: 0,
+      minMs: 1000,
+      maxMs: 5000,
+      lastStatus: "DOWN",
+      lastLatencyMs: 1000,
+    });
+    expect(stats[0]?.successRate).toBeCloseTo(2 / 3);
+    expect(stats[0]?.p50Ms).toBe(3000);
+    expect(stats[0]?.p95Ms).toBe(5000);
+    expect(stats[0]?.lastRunAt).toBe("2026-09-23T10:02:00.000Z");
   });
 
   it("reports verified vs false-positive episodes with rejection reasons", async () => {

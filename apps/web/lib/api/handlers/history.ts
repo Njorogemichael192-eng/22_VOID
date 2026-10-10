@@ -1,12 +1,14 @@
 /**
  * History endpoints (Phase 15): GET /api/v1/history/opportunities,
  * /api/v1/history/opportunities/:id, /api/v1/history/odds,
- * /api/v1/history/latency and /api/v1/history/analysis.
+ * /api/v1/history/latency, /api/v1/history/reliability and
+ * /api/v1/history/analysis.
  *
  * These expose the reconstruction layer: opportunity episodes (legs grouped by
  * their deterministic identity with first/last seen, duration and
- * disappearance), the per-leg price series, poll-to-persist source latency and
- * the false-positive analysis over concluded episodes. `eventId` here is the
+ * disappearance), the per-leg price series, poll-to-persist source latency,
+ * per-source reliability (success rate + latency percentiles) and the
+ * false-positive analysis over concluded episodes. `eventId` here is the
  * canonical event id — the identity episodes and history carry.
  */
 
@@ -19,10 +21,12 @@ import {
   oddsHistoryQuerySchema,
   parseQuery,
   sourceLatencyQuerySchema,
+  sourceReliabilityQuerySchema,
   toEpisodeHistoryFilter,
   toFalsePositiveFilter,
   toOddsHistoryFilter,
   toSourceLatencyFilter,
+  toSourceReliabilityFilter,
 } from "../schema";
 import type { ApiAuthEnv } from "../auth";
 import type { HistoryRepo } from "@22void/db";
@@ -98,6 +102,20 @@ export async function sourceLatency(request: Request, deps: HistoryHandlerDeps):
   if (!parsed.ok) return parsed.response;
 
   const stats = await deps.repo.sourceLatency(toSourceLatencyFilter(parsed.query));
+  return jsonOk({ data: stats });
+}
+
+export async function sourceReliability(
+  request: Request,
+  deps: HistoryHandlerDeps,
+): Promise<Response> {
+  const auth = await authorize(request, deps);
+  if (auth instanceof Response) return auth;
+
+  const parsed = parseQuery(request, sourceReliabilityQuerySchema);
+  if (!parsed.ok) return parsed.response;
+
+  const stats = await deps.repo.sourceReliability(toSourceReliabilityFilter(parsed.query));
   return jsonOk({ data: stats });
 }
 
