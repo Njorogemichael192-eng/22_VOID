@@ -265,15 +265,44 @@ function makeCandidate(legs: readonly PricedSelection[]): Candidate {
   };
 }
 
-/** Keeps the best price per distinct selection (spec §55 bookmaker selection). */
+/**
+ * §55 source validity: a selection is quotable from a source unless that source
+ * is explicitly down or of unknown availability. An absent status means no
+ * availability signal was attached (legacy callers), which is treated as valid
+ * so behaviour is unchanged when provenance is unavailable.
+ */
+export function isSourceAvailable(status: SourceStatus | undefined): boolean {
+  return status === undefined || status === "OK" || status === "DEGRADED";
+}
+
+/**
+ * Keeps the best price per distinct selection (spec §55 bookmaker selection).
+ *
+ * "Best" means the highest price **from a valid source**: when an available
+ * source quotes a selection, its best price wins even if a down/unknown source
+ * quotes a better one — otherwise a single stale provider would both win the
+ * price and then have its leg rejected as `PROVIDER_UNAVAILABLE`, discarding a
+ * perfectly usable quote from a healthy source. Only when no available source
+ * quotes the selection does the best unavailable quote win, so validation still
+ * rejects a selection that no healthy source carries.
+ */
 export function bestPricePerSelection(priced: readonly PricedSelection[]): PricedSelection[] {
-  const best = new Map<string, PricedSelection>();
+  const bestAvailable = new Map<string, PricedSelection>();
+  const bestAny = new Map<string, PricedSelection>();
   for (const entry of priced) {
     const key = selectionKey(entry.selection);
-    const current = best.get(key);
-    if (current === undefined || entry.odds > current.odds) best.set(key, entry);
+    const overall = bestAny.get(key);
+    if (overall === undefined || entry.odds > overall.odds) bestAny.set(key, entry);
+    if (isSourceAvailable(entry.sourceStatus)) {
+      const available = bestAvailable.get(key);
+      if (available === undefined || entry.odds > available.odds) bestAvailable.set(key, entry);
+    }
   }
-  return [...best.values()];
+  const winners: PricedSelection[] = [];
+  for (const [key, overall] of bestAny) {
+    winners.push(bestAvailable.get(key) ?? overall);
+  }
+  return winners;
 }
 
 /** Default hard cap on generated candidates (60); bounds combinatorics. */

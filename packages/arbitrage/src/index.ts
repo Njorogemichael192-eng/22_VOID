@@ -29,6 +29,7 @@ export {
   familiesCompatible,
   formatPruneVerdict,
   generateCandidates,
+  isSourceAvailable,
   isStandardComplement,
   pruneCandidate,
   pruneCandidates,

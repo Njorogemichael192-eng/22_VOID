@@ -19,6 +19,7 @@
 import {
   bestPricePerSelection,
   DEFAULT_MAX_CANDIDATES,
+  isSourceAvailable,
   type PricedSelection,
   scanCandidates,
   type CandidateScan,
@@ -135,10 +136,14 @@ function bestPricePerGenerationGroup(priced: readonly PricedSelection[]): Priced
         taken.add(winner.bookmaker);
         return winner;
       }
-      const tie = group.find(
-        (entry) =>
-          entry.odds === winner.odds && !taken.has(entry.bookmaker) && sameSelection(entry, winner)
-      );
+      // Prefer an equally-priced entry from a valid source: a tie at the best
+      // price must not hand the leg to a down provider when a healthy one quotes
+      // the same number, or the fallback above would be undone by the tie-break.
+      const tied = (entry: PricedSelection): boolean =>
+        entry.odds === winner.odds && !taken.has(entry.bookmaker) && sameSelection(entry, winner);
+      const tie =
+        group.find((entry) => tied(entry) && isSourceAvailable(entry.sourceStatus)) ??
+        group.find(tied);
       const pick = tie ?? winner;
       taken.add(pick.bookmaker);
       return pick;

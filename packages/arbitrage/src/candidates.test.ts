@@ -12,7 +12,7 @@ import {
   pruneCandidate,
   scanCandidates,
 } from "./candidates.js";
-import type { Candidate, PricedSelection } from "./candidates.js";
+import type { Candidate, PricedSelection, SourceStatus } from "./candidates.js";
 
 let counter = 0;
 
@@ -32,12 +32,20 @@ function selection(
   };
 }
 
-function matchTotal(overUnder: "OVER" | "UNDER", line: string, odds: number, book = "book-a") {
+function matchTotal(
+  overUnder: "OVER" | "UNDER",
+  line: string,
+  odds: number,
+  book = "book-a",
+  sourceStatus?: SourceStatus
+) {
   counter += 1;
   return priced(
     selection(MarketFamily.MATCH_TOTAL, MarketType.STANDARD, overUnder, { line }),
     odds,
-    book
+    book,
+    "event-1",
+    sourceStatus !== undefined ? { sourceStatus } : {}
   );
 }
 
@@ -308,6 +316,34 @@ describe("bestPricePerSelection", () => {
     const over = best.find((entry) => entry.selection.outcome === "OVER");
     expect(over?.odds).toBe(2.2);
     expect(over?.bookmaker).toBe("book-b");
+  });
+
+  it("prefers an available source over a better price from a down source (§55)", () => {
+    const best = bestPricePerSelection([
+      matchTotal("OVER", "2.5", 2.5, "down-book", "DOWN"),
+      matchTotal("OVER", "2.5", 2.1, "live-book", "OK"),
+    ]);
+    expect(best).toHaveLength(1);
+    expect(best[0]?.odds).toBe(2.1);
+    expect(best[0]?.bookmaker).toBe("live-book");
+  });
+
+  it("falls back to a down source only when no available source quotes the selection", () => {
+    const best = bestPricePerSelection([
+      matchTotal("OVER", "2.5", 2.2, "down-a", "DOWN"),
+      matchTotal("OVER", "2.5", 2.5, "down-b", "DOWN"),
+    ]);
+    expect(best).toHaveLength(1);
+    expect(best[0]?.odds).toBe(2.5);
+    expect(best[0]?.bookmaker).toBe("down-b");
+  });
+
+  it("treats an absent status as available", () => {
+    const best = bestPricePerSelection([
+      matchTotal("OVER", "2.5", 2.5, "down-book", "DOWN"),
+      matchTotal("OVER", "2.5", 2.1, "legacy-book"),
+    ]);
+    expect(best[0]?.bookmaker).toBe("legacy-book");
   });
 });
 
