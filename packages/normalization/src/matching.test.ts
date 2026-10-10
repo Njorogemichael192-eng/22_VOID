@@ -130,6 +130,71 @@ describe("computeMatchConfidence", () => {
     const assessment = computeMatchConfidence(ref(), b, teams, competitions);
     expect(assessment.signals.teams).toBe(true);
   });
+
+  it("folds the live feed spellings of the same fixture", () => {
+    const odds = ref({
+      provider: "odds-api",
+      sourceEventId: "odds-arsenal-leeds",
+      homeTeam: "Arsenal",
+      awayTeam: "Leeds United",
+    });
+    const parlay = ref({
+      provider: "parlay-api",
+      sourceEventId: "parlay-arsenal-leeds",
+      homeTeam: "Arsenal",
+      awayTeam: "Leeds United FC",
+    });
+    const assessment = computeMatchConfidence(odds, parlay, teams, competitions);
+    expect(assessment.score).toBe(1);
+    expect(assessment.signals.teams).toBe(true);
+    expect(classifyMatch(assessment)).toBe("confirmed");
+  });
+
+  it("folds AFC-suffixed spellings on both sides", () => {
+    const odds = ref({
+      provider: "odds-api",
+      sourceEventId: "o1",
+      homeTeam: "Bournemouth",
+      awayTeam: "Sunderland",
+    });
+    const parlay = ref({
+      provider: "parlay-api",
+      sourceEventId: "p1",
+      homeTeam: "AFC Bournemouth",
+      awayTeam: "Sunderland AFC",
+    });
+    expect(classifyMatch(computeMatchConfidence(odds, parlay, teams, competitions))).toBe(
+      "confirmed"
+    );
+  });
+
+  it("does not fold different clubs with similar names", () => {
+    const a = ref({ homeTeam: "Manchester United", awayTeam: "Arsenal" });
+    const b = ref({
+      provider: "parlay-api",
+      sourceEventId: "p2",
+      homeTeam: "Manchester City FC",
+      awayTeam: "Arsenal",
+    });
+    const assessment = computeMatchConfidence(a, b, teams, competitions);
+    expect(assessment.signals.teams).toBe(false);
+    expect(classifyMatch(assessment)).toBe("none");
+  });
+
+  it("keeps folded spellings uncertain when the kickoff is outside tolerance", () => {
+    const a = ref({ homeTeam: "Arsenal", awayTeam: "Leeds United" });
+    const b = ref({
+      provider: "parlay-api",
+      sourceEventId: "p3",
+      homeTeam: "Arsenal",
+      awayTeam: "Leeds United FC",
+      startTime: "2026-11-22T19:00:00.000Z",
+    });
+    const assessment = computeMatchConfidence(a, b, teams, competitions);
+    expect(assessment.signals.teams).toBe(true);
+    expect(assessment.score).toBe(0.7);
+    expect(classifyMatch(assessment)).toBe("uncertain");
+  });
 });
 
 describe("eventsMatch", () => {

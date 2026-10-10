@@ -105,6 +105,37 @@ describe("EventNormalizer — cross-provider acceptance (same event, one canonic
     expect(alias.canonicalEventId).toBe("odds-api:oddsepl001");
     expect(alias.canonicalEvent!.homeTeam).toBe("Manchester City");
   });
+
+  it("folds live feed spellings into the first-seen canonical event", () => {
+    const normalizer = new EventNormalizer();
+    const first = normalizer.register({
+      provider: "odds-api",
+      sourceEventId: "odds-arsenal-leeds",
+      homeTeam: "Arsenal",
+      awayTeam: "Leeds United",
+      competition: "England - Premier League",
+      startTime: "2026-10-10T11:30:00.000Z",
+    });
+    expect(first.action).toBe("created");
+
+    const merged = normalizer.register({
+      provider: "parlay-api",
+      sourceEventId: "parlay-arsenal-leeds",
+      homeTeam: "Arsenal",
+      awayTeam: "Leeds United FC",
+      competition: "England - Premier League",
+      startTime: "2026-10-10T11:30:00.000Z",
+    });
+    expect(merged.action).toBe("merged");
+    expect(merged.canonicalEventId).toBe("odds-api:odds-arsenal-leeds");
+    expect(merged.canonicalEvent!.homeTeam).toBe("Arsenal");
+    expect(merged.canonicalEvent!.awayTeam).toBe("Leeds United");
+    expect(normalizer.events()).toHaveLength(1);
+    expect(normalizer.events()[0]!.sourceEventIds).toHaveLength(2);
+    expect(normalizer.sourceIndex().lookup("parlay-api", "parlay-arsenal-leeds")).toBe(
+      "odds-api:odds-arsenal-leeds"
+    );
+  });
 });
 
 describe("EventNormalizer — uncertain (never silently merges)", () => {

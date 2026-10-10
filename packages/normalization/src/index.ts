@@ -42,6 +42,16 @@ export type {
   NormalizeResult,
 } from "./registry";
 
+export { DEFAULT_PROVIDER_PRIORITY, planEventReconcile } from "./event-reconcile";
+export type {
+  ReconcileEventRef,
+  ReconcileMerge,
+  ReconcileOptions,
+  ReconcilePlan,
+  ReconcileSourceRef,
+  ReconcileUncertain,
+} from "./event-reconcile";
+
 export { formatCanonicalLine, MarketNormalizer, marketIdentityKey, toStructure } from "./market";
 export type {
   MarketDescriptor,

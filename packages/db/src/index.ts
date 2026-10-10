@@ -60,6 +60,20 @@ export {
   type PersistOpportunityInput,
 } from "./store";
 export {
+  loadReconcileEvents,
+  applyEventMerge,
+  applyReconcilePlan,
+  type ReconcilableSource,
+  type ReconcilableEvent,
+  type ReconcileMergeInput,
+  type ReconcilePlanInput,
+  type MergeMoveCounts,
+  type ApplyMergeResult,
+  type ReconcileMergeOutcome,
+  type ReconcileApplyResult,
+  type ReconcileApplyOptions,
+} from "./event-reconcile";
+export {
   computeOpportunityKey,
   legKeyFromSelectionIds,
   loadOddsHistory,

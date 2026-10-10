@@ -474,6 +474,41 @@ Schedule it from cron or a systemd timer on the host, not from inside the
 container. The bundled compose stack has no scheduler for it (the only cron in
 the deployment is the backup sidecar's own).
 
+#### Cross-provider event reconciliation
+
+`EventNormalizer` folds the same match from two feeds into one canonical event
+*within a cycle*, but an event already persisted before a second provider was
+enabled stays its own row. `npm run db:reconcile-events` is a one-shot **backfill**
+that folds those historical duplicates. It is a host-run `tsx` script (not
+containerised), so give it a `DATABASE_URL` the host can reach.
+
+```sh
+# DRY RUN is the default — prints the fold plan and writes nothing.
+DATABASE_URL='postgresql://...' npm run db:reconcile-events
+
+# enforce (both flags are required; --apply alone refuses with exit 2)
+DATABASE_URL='postgresql://...' npm run db:reconcile-events -- --apply --yes
+
+# machine-readable plan, or cap the folds this run performs
+npm run db:reconcile-events -- --json
+npm run db:reconcile-events -- --max-merges 5 --apply --yes
+```
+
+The plan folds a loser event into a winner chosen by provider priority
+(`odds-api` > `parlay-api`), then earliest `createdAt`, then `canonicalEventId`.
+Only **cross-provider, confirmed** matches fold; `uncertain` candidates are held
+and never merged. Each fold is one transaction that repoints `source_event_ids`,
+`markets`, `opportunities` and `opportunity_episodes` (conflict-aware on the
+episode key) and deletes the loser, so a partial run is resumable and re-running is
+a no-op — a second dry run reports `0 folds`.
+
+**Take a dump before applying** (see § above). Recovery is restore-from-dump via
+`restore.sh`; there is deliberately no `--undo`. Two behaviours to expect, neither
+a defect: `(Corners)`-style markets that the feeds identify differently are left
+distinct, and a folded event whose legs carry `sourceUpdatedAt` stamps more than
+60 s apart will be reported `CROSS_SOURCE_TIMESTAMP_SPREAD` (a freshness verdict,
+not a matching bug).
+
 ---
 
 ## 7. Deploy & rollback

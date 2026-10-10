@@ -1,6 +1,6 @@
 # 22_VOID — Architecture
 
-Version: 1.2 | 2026-09-23
+Version: 1.3 | 2026-10-10
 
 ## System topology
 
@@ -152,6 +152,48 @@ persisted `expiresAt` records the horizon that was already missed (oldest leg ag
 is a paid-plan decision (a 15 s cadence burns the 500-credit free plan in hours), not an
 engine change: the policy stays at 15 s until then, and `STALE` is the expected steady state
 on the free plan.
+
+## Cross-provider event matching (Phase 19, Step 4)
+
+`EventNormalizer.register` already folds the *same* match from two feeds into one
+canonical event, but only for events it sees within a single ingest: it
+short-circuits on an already-bound `(provider, sourceEventId)` and compares only
+against the seeds loaded at the start of the cycle, so a fixture provider A
+persisted on an earlier cycle is not re-examined when provider B arrives. Provider
+B's copy of that fixture therefore lands as a *second* canonical event. Cross-
+provider event matching is thus a **backfill**, not a scan-cycle change — the live
+cycle already matches everything it can see.
+
+`planEventReconcile` (`packages/normalization`) is a pure planner over the persisted
+events. It proposes folds using the same `computeMatchConfidence` the live path
+uses, and the rules are deliberately narrow:
+
+- **cross-provider only** — two `parlay-api` events that merely look alike are never
+  merged; only pairs with differing `provider` qualify;
+- **winner** = highest provider priority (`odds-api` > `parlay-api`), then earliest
+  `createdAt`, then `canonicalEventId` ascending — so the fold is deterministic and
+  independent of listing order;
+- candidates are compared against the group's **root** only, so a fold never chains
+  a second re-point onto an event that is itself being removed;
+- an `uncertain` match is **held** (never merged), preserving the Phase 4 rule that
+  uncertain matches require a supervisor.
+
+`applyReconcilePlan` (`packages/db`) executes one fold per transaction. It repoints
+`source_event_ids`, `markets`, `opportunities` and `opportunity_episodes` onto the
+winner and deletes the loser; the episode repoint is **conflict-aware** against the
+unique `(eventId, structureType, legKey)` key, so a loser episode that would collide
+with an existing winner episode is not copied blindly. The worker never calls this
+path — it is an operator backfill via `npm run db:reconcile-events` (dry-run
+default; `--apply --yes` to write). `(Corners)`-style markets whose two feeds use
+different market identities are folded at the **event** level only; the markets
+stay distinct, which is intended.
+
+Interaction worth knowing: `validateCandidate` rejects a candidate whose legs'
+`sourceUpdatedAt` spread exceeds `maxSourceSpreadMs` (default 60s,
+`packages/arbitrage/src/validation.ts`). A correctly folded event whose two feeds
+stamped their prices more than 60s apart therefore surfaces as
+`CROSS_SOURCE_TIMESTAMP_SPREAD` rather than a verified arb — a freshness outcome,
+not a matching defect.
 
 ## History and reconstruction (Phase 15)
 

@@ -86,8 +86,8 @@ export class CompetitionDictionary {
 
 /** Built-in team aliases. Extensible at runtime; production builds load more. */
 export const TEAM_ALIASES: readonly (readonly [string, readonly string[]])[] = [
-  ["Manchester United", ["Man Utd", "Man United", "Manchester Utd"]],
-  ["Manchester City", ["Man City"]],
+  ["Manchester United", ["Man Utd", "Man United", "Manchester Utd", "Manchester United FC"]],
+  ["Manchester City", ["Man City", "Manchester City FC"]],
   ["Liverpool", ["Liverpool FC", "LFC"]],
   ["Chelsea", ["Chelsea FC"]],
   ["Arsenal", ["Arsenal FC"]],
@@ -98,6 +98,27 @@ export const TEAM_ALIASES: readonly (readonly [string, readonly string[]])[] = [
   ["Bayern Munich", ["FC Bayern", "Bayern München", "FC Bayern Munchen"]],
   ["Paris Saint-Germain", ["PSG", "Paris SG", "Paris Saint Germain"]],
   ["Benfica", ["SL Benfica", "Benfica Lisbon"]],
+  // Premier League clubs as spelled by the live feeds: Odds API uses the plain
+  // name, ParlayAPI appends "FC"/"AFC". The engine never strips those suffixes
+  // itself, so folding the two feeds relies on these entries.
+  ["Bournemouth", ["AFC Bournemouth", "Bournemouth AFC"]],
+  ["Everton", ["Everton FC"]],
+  ["Leeds United", ["Leeds United FC"]],
+  ["Aston Villa", ["Aston Villa FC"]],
+  ["Brentford", ["Brentford FC"]],
+  [
+    "Brighton and Hove Albion",
+    ["Brighton & Hove Albion FC", "Brighton and Hove Albion FC", "Brighton & Hove Albion"],
+  ],
+  ["Coventry City", ["Coventry City FC"]],
+  ["Crystal Palace", ["Crystal Palace FC"]],
+  ["Fulham", ["Fulham FC"]],
+  ["Hull City", ["Hull City AFC", "Hull City FC"]],
+  ["Ipswich Town", ["Ipswich Town FC"]],
+  ["Newcastle United", ["Newcastle United FC"]],
+  ["Nottingham Forest", ["Nottingham Forest FC"]],
+  ["Sunderland", ["Sunderland AFC"]],
+  ["Tottenham Hotspur", ["Tottenham Hotspur FC"]],
 ];
 
 /** Built-in competition aliases. Canonical form keeps the provider-style label. */

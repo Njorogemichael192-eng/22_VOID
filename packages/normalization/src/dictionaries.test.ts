@@ -47,6 +47,48 @@ describe("TeamDictionary", () => {
     expect(dict.resolve("Benfica Lisbon")).toEqual({ canonicalName: "Benfica", kind: "alias" });
     expect(TEAM_ALIASES.some(([canonical]) => canonical === "Benfica")).toBe(true);
   });
+
+  it("folds the live provider spellings of the same clubs", () => {
+    const dict = createDefaultTeamDictionary();
+    const pairs: readonly (readonly [string, string])[] = [
+      ["Arsenal", "Arsenal"],
+      ["Leeds United", "Leeds United FC"],
+      ["Bournemouth", "AFC Bournemouth"],
+      ["Everton", "Everton FC"],
+      ["Manchester United", "Manchester United FC"],
+      ["Manchester City", "Manchester City FC"],
+      ["Nottingham Forest", "Nottingham Forest FC"],
+      ["Sunderland", "Sunderland AFC"],
+      ["Brighton and Hove Albion", "Brighton & Hove Albion FC"],
+      ["Ipswich Town", "Ipswich Town FC"],
+      ["Fulham", "Fulham FC"],
+      ["Aston Villa", "Aston Villa FC"],
+      ["Brentford", "Brentford FC"],
+      ["Tottenham Hotspur", "Tottenham Hotspur FC"],
+      ["Hull City", "Hull City AFC"],
+      ["Crystal Palace", "Crystal Palace FC"],
+      ["Coventry City", "Coventry City FC"],
+      ["Newcastle United", "Newcastle United FC"],
+    ];
+    for (const [oddsApi, parlayApi] of pairs) {
+      const a = dict.resolve(oddsApi);
+      const b = dict.resolve(parlayApi);
+      expect(a.kind).toBe("direct");
+      expect(b.canonicalName).toBe(a.canonicalName);
+    }
+  });
+
+  it("leaves provider sort-variant labels such as '(Corners)' unrecognized", () => {
+    const dict = createDefaultTeamDictionary();
+    expect(dict.resolve("Chelsea (Corners)")).toEqual({
+      canonicalName: "Chelsea (Corners)",
+      kind: "new",
+    });
+    expect(dict.resolve("Bournemouth (Corners)")).toEqual({
+      canonicalName: "Bournemouth (Corners)",
+      kind: "new",
+    });
+  });
 });
 
 describe("CompetitionDictionary", () => {
