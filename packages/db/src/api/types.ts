@@ -14,6 +14,7 @@ import type {
   OddsHistoryPoint,
   OpportunityEpisodeSummary,
   SourceLatencyStat,
+  SourceReliabilityStat,
 } from "../history.js";
 
 /** One page of list results; `nextCursor` is null on the last page. */
@@ -236,6 +237,12 @@ export interface SourceLatencyFilter {
   limit?: number;
 }
 
+export interface SourceReliabilityFilter {
+  sourceKey?: string;
+  after?: string;
+  limit?: number;
+}
+
 export interface FalsePositiveFilter {
   after?: string;
 }
@@ -251,5 +258,6 @@ export interface HistoryRepo {
   getEpisodeReconstruction(episodeId: string): Promise<EpisodeReconstruction | null>;
   listOddsHistory(filter: OddsHistoryFilterView): Promise<OddsHistoryPoint[]>;
   sourceLatency(filter: SourceLatencyFilter): Promise<SourceLatencyStat[]>;
+  sourceReliability(filter: SourceReliabilityFilter): Promise<SourceReliabilityStat[]>;
   falsePositiveAnalysis(filter: FalsePositiveFilter): Promise<FalsePositiveReport>;
 }

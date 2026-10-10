@@ -168,10 +168,26 @@ async function ensureBookmaker(tx: Tx, name: string): Promise<Bookmaker> {
   return tx.bookmaker.create({ data: { name } });
 }
 
+/**
+ * Provider priority for choosing a folded market's primary source and for
+ * resolving a conflicting selection's provenance. Mirrors
+ * `DEFAULT_PROVIDER_PRIORITY` in @22void/normalization but is duplicated on
+ * purpose: the DB layer must not depend on the normalization package
+ * (docs/ARCHITECTURE.md).
+ */
+const PRIMARY_PROVIDER_PRIORITY: readonly string[] = ["odds-api", "parlay-api"];
+
+export function providerRank(provider: string): number {
+  const index = PRIMARY_PROVIDER_PRIORITY.indexOf(provider);
+  return index >= 0 ? index : PRIMARY_PROVIDER_PRIORITY.length;
+}
+
 async function upsertSelection(
   tx: Tx,
   input: PersistSelectionInput,
-  market: Market
+  market: Market,
+  marketSourceId: string,
+  provider: string
 ): Promise<{ created: boolean; changed: boolean } | null> {
   const mapped = toSelectionOutcomeType(input.outcome);
   if (mapped === null) return null;
@@ -183,17 +199,22 @@ async function upsertSelection(
   };
   const existing = await tx.selection.findUnique({
     where: { marketId_bookmakerId_outcome: key },
+    include: { marketSource: { include: { oddsSource: { select: { key: true } } } } },
   });
   const observedAt = new Date(input.observedAt);
   if (existing !== null) {
     const current = Number(existing.odds);
     const changed = current !== input.odds;
+    // Provenance follows the higher-priority provider on a conflict; otherwise
+    // the original source is kept so re-polls do not churn the row.
+    const repoint = providerRank(provider) < providerRank(existing.marketSource.oddsSource.key);
     const data = {
       odds: input.odds,
       observedAt,
       ...(input.sourceUpdatedAt !== undefined
         ? { sourceUpdatedAt: new Date(input.sourceUpdatedAt) }
         : {}),
+      ...(repoint ? { marketSourceId } : {}),
     };
     await tx.selection.update({ where: { id: existing.id }, data });
     if (changed) {
@@ -206,6 +227,7 @@ async function upsertSelection(
   const created = await tx.selection.create({
     data: {
       marketId: market.id,
+      marketSourceId,
       bookmakerId: bookmaker.id,
       outcome: mapped,
       odds: input.odds,
@@ -225,6 +247,28 @@ async function upsertSelection(
 // ---------------------------------------------------------------------------
 // Persist one canonical run
 // ---------------------------------------------------------------------------
+
+/**
+ * Canonical within-event market identity: the DB mirror of
+ * `marketStructureKey` in @22void/domain (duplicated so this package keeps its
+ * Prisma-only dependency). Two providers' markets with the same structure fold
+ * onto one `markets` row.
+ */
+function canonicalMarketKey(market: {
+  family: string;
+  period: string;
+  marketType: string;
+  participant?: string | null;
+  line?: string | null;
+}): string {
+  return [
+    market.family,
+    market.period,
+    market.marketType,
+    market.participant ?? "_",
+    market.line ?? "_",
+  ].join("|");
+}
 
 /**
  * Persist one collected run idempotently. Events are upserted first (markets
@@ -317,7 +361,7 @@ export async function persistCanonicalRun(
       }
 
       const ruleByKey = new Map<string, string>();
-      const marketBySourceKey = new Map<string, Market>();
+      const marketBySourceKey = new Map<string, { market: Market; marketSourceId: string }>();
       for (const market of input.markets) {
         const eventId = eventByCanonicalId.get(market.eventCanonicalId);
         if (eventId === undefined) {
@@ -339,47 +383,91 @@ export async function persistCanonicalRun(
           );
           ruleByKey.set(ruleKey, ruleId);
         }
-        const existing = await tx.market.findUnique({
+        // A market is keyed by its canonical within-event structure, so two
+        // providers' listings of the same market fold into one row; each
+        // provider's original identity is recorded in market_source_ids.
+        const canonicalMarketId = canonicalMarketKey(market);
+        const structural = {
+          period: market.period,
+          family: market.family,
+          marketType: market.marketType,
+          participant: market.participant ?? null,
+          line: market.line ?? null,
+        };
+        // findFirst (not findUnique): uniqueness of (eventId, canonicalMarketId)
+        // is enforced here rather than by a DB constraint, so the reconcile CLI
+        // can still repair legacy duplicates.
+        const existing = await tx.market.findFirst({
+          where: { eventId, canonicalMarketId },
+          include: { oddsSource: { select: { key: true } } },
+        });
+        let row: Market;
+        if (existing === null) {
+          row = await tx.market.create({
+            data: {
+              eventId,
+              oddsSourceId: source.id,
+              sourceMarketId: market.sourceMarketId,
+              settlementRuleId: ruleId,
+              canonicalMarketId,
+              ...structural,
+            },
+          });
+        } else {
+          // Keep the highest-priority provider's identity as the market's primary.
+          const promote = providerRank(source.key) < providerRank(existing.oddsSource.key);
+          row = await tx.market.update({
+            where: { id: existing.id },
+            data: {
+              ...structural,
+              ...(promote
+                ? {
+                    oddsSourceId: source.id,
+                    sourceMarketId: market.sourceMarketId,
+                    settlementRuleId: ruleId,
+                  }
+                : {}),
+            },
+          });
+        }
+        const marketSource = await tx.marketSourceId.upsert({
           where: {
             oddsSourceId_sourceMarketId: {
               oddsSourceId: source.id,
               sourceMarketId: market.sourceMarketId,
             },
           },
+          create: {
+            marketId: row.id,
+            oddsSourceId: source.id,
+            sourceMarketId: market.sourceMarketId,
+            settlementRuleId: ruleId,
+          },
+          update: { marketId: row.id, settlementRuleId: ruleId },
         });
-        const data = {
-          eventId,
-          oddsSourceId: source.id,
-          sourceMarketId: market.sourceMarketId,
-          settlementRuleId: ruleId,
-          period: market.period,
-          family: market.family,
-          marketType: market.marketType,
-          ...(market.participant !== undefined && market.participant !== null
-            ? { participant: market.participant }
-            : {}),
-          ...(market.line !== undefined && market.line !== null ? { line: market.line } : {}),
-        };
-        let row: Market;
-        if (existing === null) {
-          row = await tx.market.create({ data });
-        } else {
-          row = await tx.market.update({ where: { id: existing.id }, data });
-        }
-        marketBySourceKey.set(market.sourceMarketId, row);
+        marketBySourceKey.set(market.sourceMarketId, {
+          market: row,
+          marketSourceId: marketSource.id,
+        });
         markets += 1;
       }
 
       for (const selection of input.selections) {
-        const market = marketBySourceKey.get(selection.sourceMarketId);
-        if (market === undefined) {
+        const target = marketBySourceKey.get(selection.sourceMarketId);
+        if (target === undefined) {
           invalid.push({
             ref: selection.bookmaker,
             reason: `unknown market ${selection.sourceMarketId}`,
           });
           continue;
         }
-        const result = await upsertSelection(tx, selection, market);
+        const result = await upsertSelection(
+          tx,
+          selection,
+          target.market,
+          target.marketSourceId,
+          source.key
+        );
         if (result === null) {
           invalid.push({
             ref: selection.bookmaker,
@@ -439,10 +527,13 @@ function mapSourceStatus(status: SourceStatus): DbSourceStatus {
 }
 
 /**
- * Load the current priced selections across the persisted state. Event
- * confidence is the minimum attestation across the event's source bindings
- * (absent when no binding carries one). Settlement confidence is 1.0 whenever
- * a settlement rule row exists — the DB enforces the market→rule FK (Rule 3).
+ * Load the current priced selections across the persisted state. Provenance is
+ * read per selection (its `marketSourceId`) rather than per market, so a market
+ * folded across providers still reports each selection's true supplier and
+ * settlement rule. Event confidence is the minimum attestation across the
+ * event's source bindings (absent when no binding carries one). Settlement
+ * confidence is 1.0 whenever a settlement rule row exists — the DB enforces the
+ * selection→source→rule FK chain (Rule 3).
  */
 export async function loadPricedSelections(
   db: DbClient,
@@ -451,11 +542,10 @@ export async function loadPricedSelections(
   const rows = await db.selection.findMany({
     include: {
       bookmaker: true,
+      marketSource: { include: { oddsSource: true, settlementRule: true } },
       market: {
         include: {
           event: { include: { sourceEventIds: { select: { eventConfidence: true } } } },
-          oddsSource: true,
-          settlementRule: true,
         },
       },
     },
@@ -485,10 +575,10 @@ export async function loadPricedSelections(
       ...(row.sourceUpdatedAt !== null
         ? { sourceUpdatedAt: row.sourceUpdatedAt.toISOString() }
         : {}),
-      provider: row.market.oddsSource.key,
-      sourceStatus: mapSourceStatus(row.market.oddsSource.status),
+      provider: row.marketSource.oddsSource.key,
+      sourceStatus: mapSourceStatus(row.marketSource.oddsSource.status),
       ...(hasConfidence ? { eventConfidence: Math.min(...confidences) } : {}),
-      settlementRuleVersion: String(row.market.settlementRule.version),
+      settlementRuleVersion: String(row.marketSource.settlementRule.version),
       settlementConfidence: 1,
     };
   });

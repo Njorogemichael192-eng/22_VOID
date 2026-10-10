@@ -32,6 +32,8 @@
     "db:retention:test": "tsx scripts/db-retention.ts --self-test",
     "db:reconcile-events": "tsx scripts/reconcile-events.ts",
     "db:reconcile-events:test": "tsx scripts/reconcile-events.ts --self-test",
+    "db:reconcile-markets": "tsx scripts/reconcile-markets.ts",
+    "db:reconcile-markets:test": "tsx scripts/reconcile-markets.ts --self-test",
     "worker:collect": "npm run start --workspace @22void/odds-collector",
     "smoke:prod": "tsx scripts/smoke-prod.ts",
     "compose:prod:config": "docker compose --env-file infra/.env.prod -f infra/compose.prod.yml config --quiet",

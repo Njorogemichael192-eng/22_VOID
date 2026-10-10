@@ -52,6 +52,18 @@ export type {
   ReconcileUncertain,
 } from "./event-reconcile";
 
+export {
+  DEFAULT_MARKET_PROVIDER_PRIORITY,
+  marketRefKey,
+  planMarketReconcile,
+} from "./market-reconcile";
+export type {
+  ReconcileMarketMerge,
+  ReconcileMarketOptions,
+  ReconcileMarketPlan,
+  ReconcileMarketRef,
+} from "./market-reconcile";
+
 export { formatCanonicalLine, MarketNormalizer, marketIdentityKey, toStructure } from "./market";
 export type {
   MarketDescriptor,

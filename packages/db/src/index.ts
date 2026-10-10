@@ -74,6 +74,19 @@ export {
   type ReconcileApplyOptions,
 } from "./event-reconcile";
 export {
+  loadReconcileMarkets,
+  applyMarketMerge,
+  applyMarketReconcilePlan,
+  type ReconcilableMarket,
+  type ReconcileMarketMergeInput,
+  type ReconcileMarketPlanInput,
+  type MarketMoveCounts,
+  type ApplyMarketMergeResult,
+  type ReconcileMarketOutcome,
+  type ReconcileMarketApplyResult,
+  type ReconcileMarketApplyOptions,
+} from "./market-reconcile";
+export {
   computeOpportunityKey,
   legKeyFromSelectionIds,
   loadOddsHistory,
@@ -81,6 +94,8 @@ export {
   getEpisodeReconstruction,
   sweepOpportunityEpisodes,
   sourceLatencyStats,
+  sourceReliabilityStats,
+  percentileNearestRank,
   falsePositiveAnalysis,
   type OddsHistoryFilter,
   type OddsHistoryPoint,
@@ -95,6 +110,8 @@ export {
   type ReconcileResult,
   type SourceLatencyStat,
   type SourceLatencyOptions,
+  type SourceReliabilityStat,
+  type SourceReliabilityOptions,
   type FalsePositiveByStatus,
   type FalsePositiveReport,
 } from "./history";
@@ -131,6 +148,7 @@ export type {
   EpisodeHistoryFilter,
   OddsHistoryFilterView,
   SourceLatencyFilter,
+  SourceReliabilityFilter,
   FalsePositiveFilter,
 } from "./api/types";
 

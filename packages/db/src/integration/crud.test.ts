@@ -34,6 +34,7 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
     oddsSourceId: "",
     eventId: "",
     marketId: "",
+    marketSourceId: "",
     selectionId: "",
   };
 
@@ -240,6 +241,7 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
           oddsSourceId: ids.oddsSourceId,
           sourceMarketId: `mkt-${suffix}`,
           settlementRuleId: rule.id,
+          canonicalMarketId: `canon-${suffix}`,
           period: "FULL_MATCH",
           family: "MATCH_TOTAL",
           marketType: "STANDARD",
@@ -248,6 +250,16 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
       });
       ids.marketId = market.id;
       expect(market.status).toBe("OPEN");
+
+      const marketSource = await db.marketSourceId.create({
+        data: {
+          marketId: market.id,
+          oddsSourceId: ids.oddsSourceId,
+          sourceMarketId: `mkt-src-${suffix}`,
+          settlementRuleId: rule.id,
+        },
+      });
+      ids.marketSourceId = marketSource.id;
 
       const grouped = await db.market.findMany({
         where: {
@@ -266,23 +278,30 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
       expect(updated.status).toBe("SUSPENDED");
     });
 
-    it("rejects duplicate source market ids within a source", async () => {
+    it("allows duplicate canonical market identities at the store level", async () => {
       const rule = await db.settlementRule.findFirstOrThrow({
         where: { oddsSourceId: ids.oddsSourceId, version: 1 },
       });
-      await expect(
-        db.market.create({
-          data: {
-            eventId: ids.eventId,
-            oddsSourceId: ids.oddsSourceId,
-            sourceMarketId: `mkt-${suffix}`,
-            settlementRuleId: rule.id,
-            period: "FULL_MATCH",
-            family: "MATCH_RESULT",
-            marketType: "1X2",
-          },
-        })
-      ).rejects.toMatchObject({ code: "P2002" });
+      // (eventId, canonicalMarketId) is a plain index, not a unique constraint:
+      // the write path folds providers into one market, but the DB deliberately
+      // permits legacy duplicates so the reconcile CLI can repair them.
+      const duplicate = await db.market.create({
+        data: {
+          eventId: ids.eventId,
+          oddsSourceId: ids.oddsSourceId,
+          sourceMarketId: `mkt-dup-${suffix}`,
+          settlementRuleId: rule.id,
+          canonicalMarketId: `canon-${suffix}`,
+          period: "FULL_MATCH",
+          family: "MATCH_RESULT",
+          marketType: "1X2",
+        },
+      });
+      expect(duplicate.canonicalMarketId).toBe(`canon-${suffix}`);
+      const duplicates = await db.market.findMany({
+        where: { eventId: ids.eventId, canonicalMarketId: `canon-${suffix}` },
+      });
+      expect(duplicates).toHaveLength(2);
     });
   });
 
@@ -295,6 +314,7 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
       const selection = await db.selection.create({
         data: {
           marketId: ids.marketId,
+          marketSourceId: ids.marketSourceId,
           bookmakerId: bookmaker.id,
           outcome: "OVER",
           odds: new Prisma.Decimal("2.10"),
@@ -329,6 +349,7 @@ describe.skipIf(!dbAvailable)("Phase 1 — database CRUD integration", () => {
         db.selection.create({
           data: {
             marketId: ids.marketId,
+            marketSourceId: ids.marketSourceId,
             bookmakerId: bookmaker.id,
             outcome: "OVER",
             odds: new Prisma.Decimal("2.30"),

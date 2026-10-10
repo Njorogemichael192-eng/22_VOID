@@ -236,6 +236,7 @@ model OddsSource {
   teamAliases    TeamAlias[]
   settlementRules SettlementRule[]
   markets        Market[]
+  marketSourceIds MarketSourceId[]
   rawPayloads    RawPayload[]
   scannerChecks  ScannerHealth[]
 
@@ -261,6 +262,7 @@ model SettlementRule {
   updatedAt     DateTime     @updatedAt
 
   markets Market[]
+  marketSourceIds MarketSourceId[]
 
   @@unique([oddsSourceId, family, marketType, version])
   @@map("settlement_rules")
@@ -279,6 +281,7 @@ model Market {
   sourceMarketId   String
   settlementRuleId String
   settlementRule   SettlementRule @relation(fields: [settlementRuleId], references: [id], onDelete: Restrict)
+  canonicalMarketId String
   period           Period
   family           MarketFamily
   marketType       String
@@ -289,16 +292,42 @@ model Market {
   updatedAt        DateTime       @updatedAt
 
   selections Selection[]
+  sourceIds  MarketSourceId[]
 
-  @@unique([oddsSourceId, sourceMarketId])
+  @@index([eventId, canonicalMarketId])
   @@index([eventId, family, period, line])
   @@map("markets")
+}
+
+// ---------------------------------------------------------------------------
+// Per-source market identities (Phase 19 Step 5, spec §4.2)
+// ---------------------------------------------------------------------------
+
+model MarketSourceId {
+  id               String         @id @default(cuid())
+  marketId         String
+  market           Market         @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  oddsSourceId     String
+  oddsSource       OddsSource     @relation(fields: [oddsSourceId], references: [id], onDelete: Restrict)
+  sourceMarketId   String
+  settlementRuleId String
+  settlementRule   SettlementRule @relation(fields: [settlementRuleId], references: [id], onDelete: Restrict)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  selections Selection[]
+
+  @@unique([oddsSourceId, sourceMarketId])
+  @@index([marketId])
+  @@map("market_source_ids")
 }
 
 model Selection {
   id              String              @id @default(cuid())
   marketId        String
   market          Market              @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  marketSourceId  String
+  marketSource    MarketSourceId      @relation(fields: [marketSourceId], references: [id], onDelete: Cascade)
   bookmakerId     String
   bookmaker       Bookmaker           @relation(fields: [bookmakerId], references: [id], onDelete: Restrict)
   outcome         SelectionOutcomeType

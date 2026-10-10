@@ -27,6 +27,7 @@ import {
   listOpportunityEpisodes,
   loadOddsHistory,
   sourceLatencyStats,
+  sourceReliabilityStats,
 } from "../history";
 import type { Cursor } from "./cursor";
 import type {
@@ -52,6 +53,7 @@ import type {
   HistoryRepo,
   OddsHistoryFilterView,
   SourceLatencyFilter,
+  SourceReliabilityFilter,
 } from "./types";
 
 type EventWithSources = Event & {
@@ -532,6 +534,13 @@ export function createHistoryRepo(client: PrismaClient = getPrismaClient()): His
     },
     async sourceLatency(filter: SourceLatencyFilter) {
       return sourceLatencyStats(client, {
+        ...(filter.sourceKey !== undefined ? { sourceKey: filter.sourceKey } : {}),
+        ...(filter.after !== undefined ? { after: filter.after } : {}),
+        ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
+      });
+    },
+    async sourceReliability(filter: SourceReliabilityFilter) {
+      return sourceReliabilityStats(client, {
         ...(filter.sourceKey !== undefined ? { sourceKey: filter.sourceKey } : {}),
         ...(filter.after !== undefined ? { after: filter.after } : {}),
         ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
